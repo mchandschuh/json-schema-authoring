@@ -1,0 +1,311 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.handschuh.dev/sdlc/task-decomposition/v1",
+  "title": "Task Decomposition Test Contract",
+  "description": "A local contract fixture for validating one-level task decomposition results.",
+  "type": "object",
+  "properties": {
+    "intent": {
+      "$ref": "#/$defs/Intent",
+      "description": "The bounded decomposition request used to interpret the result.",
+      "examples": [
+        {
+          "range": {
+            "name": "task-contract-decomposition",
+            "description": "Decompose task-contract work into bounded child tasks.",
+            "start": "00000000",
+            "end": "99999999",
+            "maxDepth": 1,
+            "maxChildren": 2,
+            "allowableChildTypes": ["implementation", "validation"]
+          },
+          "rules": {
+            "singleLevel": {
+              "instruction": "Produce one bounded level of children.",
+              "verification": "Confirm that no grandchildren were created."
+            }
+          }
+        }
+      ]
+    },
+    "result": {
+      "$ref": "#/$defs/DecompositionResult",
+      "description": "The produced child tasks and any limitations.",
+      "examples": [
+        {
+          "status": "decomposed",
+          "tasks": [
+            {
+              "ref": "WI-0003|50000000#task/T-001",
+              "taskType": "implementation"
+            },
+            {
+              "ref": "WI-0003|60000000#task/T-002",
+              "taskType": "validation"
+            }
+          ],
+          "limitations": []
+        }
+      ]
+    }
+  },
+  "required": ["intent", "result"],
+  "additionalProperties": false,
+  "examples": [
+    {
+      "intent": {
+        "range": {
+          "name": "task-contract-decomposition",
+          "description": "Decompose task-contract work into bounded child tasks.",
+          "start": "00000000",
+          "end": "99999999",
+          "maxDepth": 1,
+          "maxChildren": 2,
+          "allowableChildTypes": ["implementation", "validation"]
+        },
+        "rules": {
+          "singleLevel": {
+            "instruction": "Produce one bounded level of children.",
+            "verification": "Confirm that no grandchildren were created."
+          }
+        }
+      },
+      "result": {
+        "status": "decomposed",
+        "tasks": [
+          {
+            "ref": "WI-0003|50000000#task/T-001",
+            "taskType": "implementation"
+          },
+          {
+            "ref": "WI-0003|60000000#task/T-002",
+            "taskType": "validation"
+          }
+        ],
+        "limitations": []
+      }
+    }
+  ],
+  "$defs": {
+    "TaskType": {
+      "type": "string",
+      "description": "The category of work assigned to a produced task.",
+      "enum": ["implementation", "validation"],
+      "examples": ["implementation"]
+    },
+    "TaskReference": {
+      "type": "string",
+      "description": "A qualified work-item and task reference.",
+      "pattern": "^WI-[0-9]{4}\\|[0-9]{8}#task/T-[0-9]{3}$",
+      "examples": ["WI-0003|50000000#task/T-001"]
+    },
+    "Task": {
+      "type": "object",
+      "description": "A produced child task reference paired with its task category.",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/TaskReference",
+          "description": "The qualified reference of the produced task.",
+          "examples": ["WI-0003|50000000#task/T-001"]
+        },
+        "taskType": {
+          "$ref": "#/$defs/TaskType",
+          "description": "The task category selected for the produced task.",
+          "examples": ["implementation"]
+        }
+      },
+      "required": ["ref", "taskType"],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "ref": "WI-0003|50000000#task/T-001",
+          "taskType": "implementation"
+        }
+      ]
+    },
+    "DecompositionResult": {
+      "type": "object",
+      "description": "The bounded set of tasks produced by decomposition.",
+      "properties": {
+        "status": {
+          "type": "string",
+          "description": "The outcome of the decomposition operation.",
+          "const": "decomposed",
+          "examples": ["decomposed"]
+        },
+        "tasks": {
+          "type": "array",
+          "description": "The qualified child tasks produced at the requested level.",
+          "items": {
+            "$ref": "#/$defs/Task"
+          },
+          "minItems": 1,
+          "examples": [
+            [
+              {
+                "ref": "WI-0003|50000000#task/T-001",
+                "taskType": "implementation"
+              }
+            ]
+          ]
+        },
+        "limitations": {
+          "type": "array",
+          "description": "Known constraints or omissions affecting the produced result.",
+          "items": {
+            "type": "string"
+          },
+          "examples": [[]]
+        }
+      },
+      "required": ["status", "tasks", "limitations"],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "status": "decomposed",
+          "tasks": [
+            {
+              "ref": "WI-0003|50000000#task/T-001",
+              "taskType": "implementation"
+            }
+          ],
+          "limitations": []
+        }
+      ]
+    },
+    "Intent": {
+      "type": "object",
+      "description": "The request boundaries and verification rules for decomposition.",
+      "properties": {
+        "range": {
+          "type": "object",
+          "description": "The bounded range and task categories allowed for decomposition.",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The name of the decomposition operation.",
+              "minLength": 1,
+              "examples": ["task-contract-decomposition"]
+            },
+            "description": {
+              "type": "string",
+              "description": "The purpose of the decomposition operation.",
+              "minLength": 1,
+              "examples": ["Decompose task-contract work into bounded child tasks."]
+            },
+            "start": {
+              "type": "string",
+              "description": "The inclusive lower sequence boundary.",
+              "pattern": "^[0-9]{8}$",
+              "examples": ["00000000"]
+            },
+            "end": {
+              "type": "string",
+              "description": "The inclusive upper sequence boundary.",
+              "pattern": "^[0-9]{8}$",
+              "examples": ["99999999"]
+            },
+            "maxDepth": {
+              "type": "integer",
+              "description": "The maximum number of child levels to produce.",
+              "minimum": 0,
+              "examples": [1]
+            },
+            "maxChildren": {
+              "type": "integer",
+              "description": "The maximum number of child tasks to produce.",
+              "minimum": 1,
+              "examples": [2]
+            },
+            "allowableChildTypes": {
+              "type": "array",
+              "description": "The task categories permitted in the result.",
+              "items": {
+                "$ref": "#/$defs/TaskType"
+              },
+              "minItems": 1,
+              "uniqueItems": true,
+              "examples": [["implementation", "validation"]]
+            }
+          },
+          "required": ["name", "description", "start", "end", "maxDepth", "maxChildren", "allowableChildTypes"],
+          "additionalProperties": false,
+          "examples": [
+            {
+              "name": "task-contract-decomposition",
+              "description": "Decompose task-contract work into bounded child tasks.",
+              "start": "00000000",
+              "end": "99999999",
+              "maxDepth": 1,
+              "maxChildren": 2,
+              "allowableChildTypes": ["implementation", "validation"]
+            }
+          ]
+        },
+        "rules": {
+          "type": "object",
+          "description": "Named instructions and checks governing decomposition.",
+          "properties": {
+            "singleLevel": {
+              "type": "object",
+              "description": "The instruction and verification for one-level decomposition.",
+              "properties": {
+                "instruction": {
+                  "type": "string",
+                  "description": "The instruction applied while producing tasks.",
+                  "minLength": 1,
+                  "examples": ["Produce one bounded level of children."]
+                },
+                "verification": {
+                  "type": "string",
+                  "description": "The check used to confirm the instruction was followed.",
+                  "minLength": 1,
+                  "examples": ["Confirm that no grandchildren were created."]
+                }
+              },
+              "required": ["instruction", "verification"],
+              "additionalProperties": false,
+              "examples": [
+                {
+                  "instruction": "Produce one bounded level of children.",
+                  "verification": "Confirm that no grandchildren were created."
+                }
+              ]
+            }
+          },
+          "required": ["singleLevel"],
+          "additionalProperties": false,
+          "examples": [
+            {
+              "singleLevel": {
+                "instruction": "Produce one bounded level of children.",
+                "verification": "Confirm that no grandchildren were created."
+              }
+            }
+          ]
+        }
+      },
+      "required": ["range", "rules"],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "range": {
+            "name": "task-contract-decomposition",
+            "description": "Decompose task-contract work into bounded child tasks.",
+            "start": "00000000",
+            "end": "99999999",
+            "maxDepth": 1,
+            "maxChildren": 2,
+            "allowableChildTypes": ["implementation", "validation"]
+          },
+          "rules": {
+            "singleLevel": {
+              "instruction": "Produce one bounded level of children.",
+              "verification": "Confirm that no grandchildren were created."
+            }
+          }
+        }
+      ]
+    }
+  }
+}

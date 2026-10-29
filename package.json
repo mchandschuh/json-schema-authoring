@@ -1,0 +1,47 @@
+{
+  "name": "schema-validate",
+  "version": "0.1.0",
+  "description": "Validate JSON Schema documents and enforce descriptive authoring conventions.",
+  "type": "module",
+  "private": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "schema-validate": "./bin/schema-validate.js"
+  },
+  "exports": {
+    "./instance": {
+      "types": "./dist/core/schema/instance.d.ts",
+      "import": "./dist/core/schema/instance.js"
+    },
+    "./validator": {
+      "types": "./dist/core/schema/validator.d.ts",
+      "import": "./dist/core/schema/validator.js"
+    }
+  },
+  "files": [
+    "SKILL.md",
+    "bin/",
+    "dist/",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli/main.ts",
+    "start": "node ./bin/schema-validate.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "license": "UNLICENSED"
+}
