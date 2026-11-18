@@ -12,6 +12,7 @@ const DIALECT = 'https://json-schema.org/draft/2020-12/schema';
 export interface SchemaValidatorOptions {
   readonly rules?: readonly SchemaRule[];
   readonly schemaRoot?: string;
+  readonly schemaRoots?: readonly string[];
 }
 
 function ajvMessage(errors: readonly ErrorObject[] | null | undefined): string {
@@ -26,11 +27,13 @@ function parserFinding(path: string, message: string, code = 'INVALID_JSON'): Sc
 export class SchemaValidator {
   readonly #rules: readonly SchemaRule[];
   readonly #schemaRoot: string | undefined;
+  readonly #schemaRoots: readonly string[] | undefined;
   readonly #ajv: Ajv2020;
 
   constructor(options: SchemaValidatorOptions = {}) {
     this.#rules = options.rules ?? schemaRules;
     this.#schemaRoot = options.schemaRoot;
+    this.#schemaRoots = options.schemaRoots;
     this.#ajv = new Ajv2020({ allErrors: true, strict: false, validateSchema: true });
   }
 
@@ -56,7 +59,7 @@ export class SchemaValidator {
     const metaAjv = new Ajv2020({ allErrors: true, strict: false, validateSchema: true });
     if (!metaAjv.validateSchema(schema)) findings.push(parserFinding('$', ajvMessage(metaAjv.errors), 'SCHEMA_META_INVALID'));
 
-    const resolver = new LocalSchemaResolver({ documentPath, rootSchema: schema, schemaRoot: this.#schemaRoot });
+    const resolver = new LocalSchemaResolver({ documentPath, rootSchema: schema, schemaRoot: this.#schemaRoot, schemaRoots: this.#schemaRoots });
     const ajv = new Ajv2020({
       allErrors: true,
       strict: false,
@@ -109,7 +112,7 @@ export class SchemaValidator {
         const scopedChildSchema = isSchemaObject(childSchema)
           ? {
             ...childSchema,
-            ...(this.#schemaRoot ? { $id: `${exampleId}?example=${exampleSchemaCounter++}` } : {}),
+            ...(this.#schemaRoot || (this.#schemaRoots?.length ?? 0) > 0 ? { $id: `${exampleId}?example=${exampleSchemaCounter++}` } : {}),
             ...(isSchemaObject(schema.$defs) || isSchemaObject(childSchema.$defs)
               ? { $defs: { ...(isSchemaObject(schema.$defs) ? schema.$defs : {}), ...(isSchemaObject(childSchema.$defs) ? childSchema.$defs : {}) } }
               : {}),

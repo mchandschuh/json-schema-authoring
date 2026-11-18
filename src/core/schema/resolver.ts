@@ -3,11 +3,15 @@ import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isSchemaObject } from './types.js';
 
+const DIALECT = 'https://json-schema.org/draft/2020-12/schema';
+
 export interface SchemaResolverOptions {
   readonly documentPath: string;
   readonly rootSchema: unknown;
   /** Directory containing the complete local schema collection. */
   readonly schemaRoot?: string;
+  /** Additional trusted directories containing registered schemas. */
+  readonly schemaRoots?: readonly string[];
 }
 
 export interface SchemaRegistry {
@@ -36,15 +40,15 @@ function isInside(rootDirectory: string, candidate: string): boolean {
 /**
  * Resolves JSON Schema references to local files without making network calls.
  * Relative references are resolved from the referencing document directory.
- * When a schema collection root is supplied, local schema identifiers are indexed
- * so stable public IDs continue to resolve after files are moved into nested
- * family/version directories. Network retrieval is never attempted.
+ * Registered directories are indexed so stable public IDs continue to resolve
+ * across independent schema directories. Network retrieval is never attempted.
  */
 export class LocalSchemaResolver {
   readonly #documentPath: string;
   readonly #documentDirectory: string;
-  readonly #schemaRoot: string;
+  readonly #schemaRoots: readonly string[];
   readonly #indexLocalIds: boolean;
+  readonly #hasExplicitSchemaRoot: boolean;
   readonly #rootSchema: unknown;
   readonly #uriToPath = new Map<string, string>();
   readonly #indexedSchemas = new Map<string, Record<string, unknown>>();
@@ -55,8 +59,16 @@ export class LocalSchemaResolver {
   constructor(options: SchemaResolverOptions) {
     this.#documentPath = resolve(options.documentPath);
     this.#documentDirectory = dirname(this.#documentPath);
-    this.#schemaRoot = resolve(options.schemaRoot ?? this.#documentDirectory);
-    this.#indexLocalIds = options.schemaRoot !== undefined;
+    const configuredRoots = [
+      ...(options.schemaRoot ? [options.schemaRoot] : []),
+      ...(options.schemaRoots ?? []),
+    ];
+    this.#schemaRoots = [...new Set([
+      ...(options.schemaRoot ? [] : [this.#documentDirectory]),
+      ...configuredRoots,
+    ].map((path) => resolve(path)))];
+    this.#indexLocalIds = options.schemaRoot !== undefined || (options.schemaRoots?.length ?? 0) > 0;
+    this.#hasExplicitSchemaRoot = options.schemaRoot !== undefined;
     this.#rootSchema = options.rootSchema;
     const rootId = isSchemaObject(options.rootSchema) && typeof options.rootSchema.$id === 'string'
       ? options.rootSchema.$id
@@ -90,13 +102,15 @@ export class LocalSchemaResolver {
     if (!isSchemaObject(schema)) throw new Error(`Referenced schema ${documentPath} must be a JSON object.`);
 
     if (typeof schema.$id === 'string') this.#uriToPath.set(withoutFragment(schema.$id), documentPath);
+    this.#indexRelativeReferences(documentPath, schema);
     return schema;
   }
 
-  /** Register indexed files and aliases for synchronous child-example checks. */
+  /** Register indexed file aliases for synchronous child-example checks. */
   async registerWith(registry: SchemaRegistry): Promise<void> {
     await this.#ensureIndex();
     for (const [path, schema] of this.#indexedSchemas) {
+      if (typeof schema.$schema === 'string' && schema.$schema !== DIALECT) continue;
       for (const alias of this.#pathAliases.get(path) ?? []) {
         if (alias === schema.$id || this.#canonicalIds.has(withoutFragment(alias))) continue;
         if (registry.getSchema?.(alias)) continue;
@@ -109,7 +123,9 @@ export class LocalSchemaResolver {
 
   async #ensureIndex(): Promise<void> {
     if (!this.#indexLocalIds) return;
-    if (!this.#indexPromise) this.#indexPromise = this.#indexSchemaFiles(this.#schemaRoot);
+    if (!this.#indexPromise) this.#indexPromise = (async () => {
+      for (const root of this.#schemaRoots) await this.#indexSchemaFiles(root);
+    })();
     await this.#indexPromise;
   }
 
@@ -126,7 +142,7 @@ export class LocalSchemaResolver {
         await this.#indexSchemaFiles(path);
         continue;
       }
-      if (!entry.isFile() || !entry.name.endsWith('.schema.json') || path === this.#documentPath) continue;
+      if (!entry.isFile() || !entry.name.endsWith('.json') || path === this.#documentPath) continue;
       let schema: unknown;
       try {
         schema = JSON.parse(await readFile(path, 'utf8')) as unknown;
@@ -163,7 +179,7 @@ export class LocalSchemaResolver {
             try {
               const resolvedUri = new URL(child, schema.$id as string).href;
               this.#uriToPath.set(withoutFragment(resolvedUri), target);
-              if (isInside(this.#schemaRoot, target)) {
+              if (this.#isTrustedPath(target)) {
                 this.#uriToPath.set(withoutFragment(resolvedUri), target);
                 const alias = withoutFragment(resolvedUri);
                 if (!this.#canonicalIds.has(alias)) {
@@ -201,14 +217,15 @@ export class LocalSchemaResolver {
         const rootUrl = new URL(rootId);
         if (rootUrl.origin === parsed.origin) {
           const schemaRootPath = parsed.pathname.replace(/^\/+/, '');
-          const rootMappedPath = resolve(this.#schemaRoot, decodePath(schemaRootPath));
-          if (isInside(this.#schemaRoot, rootMappedPath)) {
-            try {
-              await readFile(rootMappedPath);
-              return rootMappedPath;
-            } catch {
-              // The public URI may be a legacy identifier. Fall back to the
-              // root document's local directory below.
+          for (const schemaRoot of this.#schemaRoots) {
+            const rootMappedPath = resolve(schemaRoot, decodePath(schemaRootPath));
+            if (this.#isTrustedPath(rootMappedPath)) {
+              try {
+                await readFile(rootMappedPath);
+                return rootMappedPath;
+              } catch {
+                // The public URI may be a legacy identifier. Continue searching.
+              }
             }
           }
 
@@ -222,13 +239,21 @@ export class LocalSchemaResolver {
         throw new Error(`Root schema identifier is not a valid URI: ${rootId}`);
       }
     }
-    if (this.#indexLocalIds) throw new Error(`Referenced local schema is not indexed within the schema root: ${uri}`);
+    if (this.#indexLocalIds) throw new Error(`Referenced local schema is not indexed within the registered schema directories: ${uri}`);
     throw new Error(`Network schema resolution is disabled for external URI: ${uri}`);
+  }
+
+  #isTrustedPath(candidate: string): boolean {
+    const normalized = resolve(candidate);
+    return this.#schemaRoots.some((root) => isInside(root, normalized));
   }
 
   #safePath(candidate: string): string {
     const normalized = resolve(candidate);
-    if (!isInside(this.#schemaRoot, normalized)) throw new Error(`Referenced schema escapes the schema root: ${normalized}`);
+    if (!this.#isTrustedPath(normalized)) {
+      const boundary = this.#hasExplicitSchemaRoot ? 'schema root' : 'registered schema directories';
+      throw new Error(`Referenced schema escapes the ${boundary}: ${normalized}`);
+    }
     return normalized;
   }
 }

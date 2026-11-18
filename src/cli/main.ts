@@ -18,7 +18,8 @@ export async function main(args: readonly string[] = process.argv.slice(2)): Pro
     console.log(packageJson.version);
     return 0;
   }
-  const command = registry.get('validate');
-  if (!command) throw new Error('The validate command was not discovered.');
-  return command.handler(args);
+  const commandName = first === 'list' || first === 'registry' ? first : 'validate';
+  const command = registry.get(commandName);
+  if (!command) throw new Error(`The ${commandName} command was not discovered.`);
+  return command.handler(commandName === 'validate' ? args : args.slice(1));
 }

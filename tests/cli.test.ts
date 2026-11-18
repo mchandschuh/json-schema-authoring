@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { main } from '../src/cli/main.js';
 
 async function file(name: string, content: string): Promise<string> {
@@ -59,6 +59,20 @@ async function invoke(args: readonly string[]): Promise<{ exitCode: number; outp
 }
 
 describe('schema-validate CLI', () => {
+  let originalHome: string | undefined;
+  let isolatedHome: string;
+
+  beforeAll(async () => {
+    originalHome = process.env.HOME;
+    isolatedHome = await mkdtemp(join(tmpdir(), 'schema-cli-home-'));
+    process.env.HOME = isolatedHome;
+  });
+
+  afterAll(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+  });
+
   it('prints actionable help', async () => {
     const output: string[] = [];
     const original = console.log;
@@ -247,5 +261,55 @@ describe('schema-validate CLI', () => {
     const schemaOnly = await invoke([schemaOnlyPath]);
     expect(schemaOnly.exitCode).toBe(0);
     expect(schemaOnly.output).toEqual([`PASS ${schemaOnlyPath}`]);
+  });
+
+  it('adds, lists, and removes registry directories in the home configuration location', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'schema-cli-registry-'));
+    const home = join(root, 'home');
+    const schemas = join(root, 'schemas');
+    await mkdir(schemas, { recursive: true });
+    await writeFile(join(schemas, 'registered.schema.json'), valid, 'utf8');
+
+    const originalHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const add = await invoke(['registry', 'add', schemas, '--json']);
+      expect(add.exitCode).toBe(0);
+      expect(JSON.parse(add.output.join('\n'))).toMatchObject({ added: true, directory: schemas });
+
+      const referencingSchemaPath = join(root, 'referencing.schema.json');
+      await writeFile(referencingSchemaPath, JSON.stringify({
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        $id: 'https://example.com/referencing',
+        title: 'Referencing schema',
+        description: 'A schema that resolves a registered schema by identifier.',
+        type: 'object',
+        properties: { user: { $ref: 'https://example.com/user', description: 'The registered user.', examples: [{ userName: 'ada' }] } },
+        required: ['user'],
+        additionalProperties: false,
+        examples: [{ user: { userName: 'ada' } }],
+      }), 'utf8');
+      const referencing = await invoke([referencingSchemaPath]);
+      expect(referencing.exitCode).toBe(0);
+      expect(referencing.output).toEqual([`PASS ${referencingSchemaPath}`]);
+
+      const registryList = await invoke(['registry', 'list', '--json']);
+      expect(registryList.exitCode).toBe(0);
+      expect(JSON.parse(registryList.output.join('\n')).directories).toEqual([expect.objectContaining({ directory: schemas, location: 'home' })]);
+
+      const schemaList = await invoke(['list', '--json']);
+      expect(schemaList.exitCode).toBe(0);
+      expect(JSON.parse(schemaList.output.join('\n')).schemas).toEqual([expect.objectContaining({ id: 'https://example.com/user', path: join(schemas, 'registered.schema.json') })]);
+
+      const config = JSON.parse(await readFile(join(home, '.schema-validate', 'config.json'), 'utf8')) as { schemaRegistry: { directories: string[] } };
+      expect(config.schemaRegistry.directories).toEqual([schemas]);
+
+      const remove = await invoke(['registry', 'remove', schemas, '--json']);
+      expect(remove.exitCode).toBe(0);
+      expect(JSON.parse(remove.output.join('\n'))).toMatchObject({ removed: true, directory: schemas });
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
   });
 });

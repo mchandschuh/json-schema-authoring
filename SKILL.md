@@ -1,6 +1,6 @@
 ---
 name: json-schema-authoring
-description: Create complete, descriptive JSON Schema 2020-12 documents and validate them with the schema-validate Node.js CLI.
+description: Create complete, descriptive JSON Schema 2020-12 documents and validate them with the schema-validate Node.js CLI, including its local schema registry and listing commands.
 metadata:
   category:
     - schema-design
@@ -43,6 +43,8 @@ metadata:
     - descriptive_field_documentation
     - example_quality_checks
     - node_cli_validation
+    - schema_registry_management
+    - registered_schema_listing
     - python_validator_guidance
   failure_modes:
     - missing_dialect
@@ -249,7 +251,7 @@ does not by itself require changing its public `$id`; filesystem organization an
 public schema identity are separate concerns.
 
 References between files MUST be resolvable in the repository's configured local
-schema root. Prefer explicit relative file references for moved repository files:
+schema roots. Prefer explicit relative file references for moved repository files:
 
 ```json
 { "$ref": "../../common/v1/reference.schema.json#/$defs/Reference" }
@@ -257,9 +259,11 @@ schema root. Prefer explicit relative file references for moved repository files
 
 Use `./sibling.schema.json` for a file in the same version directory. Resolve
 relative references from the referencing document's directory, preserve fragments,
-and never rely on network retrieval. When a schema collection is nested, the
-validator's schema root is the safety boundary; references that escape it MUST be
-rejected.
+and never rely on network retrieval. When a schema collection is nested, each
+configured schema root is a safety boundary; references that escape all configured
+roots MUST be rejected. Registered directories are also indexed by `$id`, so an
+absolute local schema identifier can resolve to a schema in another registered
+directory without network access.
 
 For the repository-local validator, pass the collection root explicitly:
 
@@ -272,6 +276,54 @@ When a schema is moved, update its relative `$ref` values, examples containing
 repository paths, runtime consumers, fixtures, documentation, and validation
 commands together. Validate the complete nested tree rather than only the moved
 root file.
+
+## Schema registry configuration
+
+Schema directories can be registered persistently through the configuration
+locations provided by the companion `nodejs-common` configuration convention:
+
+```text
+<current-working-directory>/.config/config.json   # app
+~/.schema-validate/config.json                    # home
+$SDLC_CONFIG/config.json                          # env, when SDLC_CONFIG is set
+```
+
+Each configuration file may contain the following object. Directory values may be
+absolute paths or paths relative to that configuration location; the CLI stores
+new entries as normalized absolute paths.
+
+```json
+{
+  "schemaRegistry": {
+    "directories": ["/absolute/path/to/schemas"]
+  }
+}
+```
+
+Manage the registry with:
+
+```bash
+# Mutations default to the home configuration location.
+schema-validate registry add /path/to/schemas
+schema-validate registry remove /path/to/schemas
+
+# Read operations default to all existing configuration locations.
+schema-validate registry list
+schema-validate list
+
+# Select one configuration location explicitly.
+schema-validate registry list --config-location app
+schema-validate registry add /path/to/schemas --config-location env
+schema-validate list --config-location home --json
+```
+
+`registry list` includes the configuration location and file where each directory
+is defined. `list` recursively reports JSON schema files with a non-empty `$id`,
+their absolute paths, and their defining configuration locations. Malformed JSON
+files and JSON files without `$id` are not registered. The directories returned by
+the registry are automatically used for both schema authoring validation and
+instance validation, including references from one registered directory to a
+schema in another.
 
 ## Rule contract enforced by `schema-validate`
 
@@ -294,8 +346,13 @@ The CLI also reports parser and Ajv failures: `INVALID_JSON`, `FILE_READ_ERROR`,
 
 ## CLI reference
 
-The executable accepts one or more file paths. Paths are read in parallel, but the
-report order follows the input order and findings are deterministic.
+`schema-validate` provides schema authoring validation, instance validation, a
+configuration-backed schema registry, and schema listing. Registered directories
+are loaded automatically for both schema and instance validation. Positional schema
+paths are read in parallel, but report order follows the input order and findings
+are deterministic.
+
+### Validate schema documents
 
 ```bash
 # Human-readable diagnostics
@@ -307,7 +364,15 @@ schema-validate schemas/user.schema.json schemas/error.schema.json
 # Stable machine-readable aggregate report for CI or another agent
 schema-validate --json --root schemas \
   $(find schemas -type f -name '*.schema.json' -print | sort)
+```
 
+The positional form applies the authoring rules described above. `--root` is an
+explicit local reference root; registered directories are added automatically from
+the app, home, and environment configuration locations.
+
+### Validate instances
+
+```bash
 # Validate a JSON instance against one schema, resolving local $refs under the root
 schema-validate --root schemas \
   --schema schemas/user/v1/user.schema.json \
@@ -317,9 +382,80 @@ schema-validate --root schemas \
 schema-validate --root schemas \
   --schema schemas/user/v1/user.schema.json \
   --document fixtures/user.yaml
+```
 
-# Usage and rule summary
+Instance mode requires `--schema` and `--document` together. `--root` is optional
+when at least one registered schema directory is available. It remains useful for
+one-off local collections and is combined with the registered directories when
+both are supplied.
+
+### List registered schemas
+
+```bash
+# Human-readable `$id` and absolute file path for every registered schema
+schema-validate list
+
+# Machine-readable schema inventory, including directory and configuration provenance
+schema-validate list --json
+
+# Restrict the inventory to one configuration location
+schema-validate list --config-location home
+```
+
+`list` recursively scans registered directories and reports JSON files with a
+non-empty `$id`, regardless of their declared dialect. Human output contains the
+schema identifier and file path. Authoring and reference validation use the
+tool's JSON Schema 2020-12 Ajv configuration; registering an older-dialect schema
+does not make that dialect available to the validator. JSON output has this shape:
+
+```json
+{
+  "schemas": [
+    {
+      "id": "https://schemas.example.test/user/v1",
+      "path": "/absolute/path/to/user.schema.json",
+      "directory": "/absolute/path/to/schemas",
+      "definedIn": [
+        {
+          "location": "home",
+          "configPath": "/home/user/.schema-validate/config.json"
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Manage registered directories
+
+```bash
+# Add and remove entries; mutations default to the home location
+schema-validate registry add /path/to/schemas
+schema-validate registry remove /path/to/schemas
+
+# List configured directories and where each is defined
+schema-validate registry list
+schema-validate registry list --json
+
+# Select a configuration location explicitly
+schema-validate registry add /path/to/schemas --config-location app
+schema-validate registry list --config-location env
+```
+
+`registry list` defaults to all available configuration locations and reports each
+directory, its location, and its configuration file. `registry add` and
+`registry remove` default to `home`; use `--config-location app`, `home`, or `env`
+to target another location. The `env` location requires `SDLC_CONFIG` to name an
+existing absolute directory. Add requires a real schema directory and stores its
+normalized absolute path. Adding an existing entry is idempotent; removing an
+unconfigured entry fails.
+
+### Help, version, and output
+
+```bash
 schema-validate --help
+schema-validate list --help
+schema-validate registry --help
 schema-validate --version
 ```
 
@@ -337,7 +473,9 @@ and does not apply authoring rules to the schema. Schema files are always JSON.
 Instance files are selected by extension: `.json` uses strict JSON parsing, while
 `.yaml` and `.yml` use YAML 1.2 parsing. Exactly one YAML document is accepted;
 duplicate keys and unresolved/custom tags are rejected. Network `$ref` retrieval is
-never attempted, and local references must remain inside `--root`.
+never attempted, and local references must remain inside `--root` or one of the
+registered schema directories. Absolute registered `$id` references can resolve
+across registered directories.
 
 Instance-mode `--json` output contains `valid`, `schema`, `document`, detected
 `format` on successful parsing, and structured Ajv `errors` with `instancePath`,

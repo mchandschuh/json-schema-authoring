@@ -2,11 +2,14 @@ import { readFile } from 'node:fs/promises';
 import type { CommandDescriptor } from '../../core/cli/descriptor.js';
 import { parseDocumentFile, type DocumentParseError, type DocumentFormat } from '../../core/document/parser.js';
 import { validateInstanceAsync, type InstanceValidationError, type InstanceValidationReport } from '../../core/schema/instance.js';
+import { SchemaRegistryConfiguration } from '../../core/schema/registry.js';
 import { SchemaValidator, type ValidationReport } from '../../core/schema/validator.js';
 
 const HELP_LINES = [
   'Usage: schema-validate <schema.json> [more-schema.json ...] [options]',
   'Usage: schema-validate --root <directory> --schema <schema.json> --document <document.json|document.yaml>',
+  'Usage: schema-validate list [options]',
+  'Usage: schema-validate registry <add|list|remove> [directory] [options]',
   'Validate one or more JSON Schema 2020-12 documents and enforce authoring conventions.',
   'The --schema/--document form validates a JSON or YAML instance against one schema.',
   '',
@@ -15,6 +18,7 @@ const HELP_LINES = [
   '  -v, --version  Show the installed version',
   '  --json  Emit one machine-readable JSON report for all files',
   '  --root <directory>  Restrict local reference resolution to this schema root',
+  '  Registered schema directories are loaded from app, home, and env configuration locations',
   '  --schema <schema.json>  Schema to use in instance-validation mode',
   '  --document <document.json|document.yaml>  JSON or YAML instance to validate',
   '',
@@ -117,12 +121,13 @@ async function readJsonSchema(schemaPath: string): Promise<unknown> {
   }
 }
 
-async function validateInstanceFile(schemaPath: string, documentPath: string, schemaRoot: string): Promise<InstanceReport> {
+async function validateInstanceFile(schemaPath: string, documentPath: string, schemaRoot: string | undefined, schemaRoots: readonly string[]): Promise<InstanceReport> {
   try {
     const [schema, document] = await Promise.all([readJsonSchema(schemaPath), parseDocumentFile(documentPath)]);
     const result: InstanceValidationReport = await validateInstanceAsync(schema, document.value, {
       documentPath: schemaPath,
       schemaRoot,
+      schemaRoots,
     });
     return { schema: schemaPath, document: documentPath, format: document.format, ...result };
   } catch (error) {
@@ -167,6 +172,14 @@ const command: CommandDescriptor = {
       return 2;
     }
     if (parsed.help) return help();
+    let schemaRoots: readonly string[];
+    try {
+      const configured = await new SchemaRegistryConfiguration().list('all');
+      schemaRoots = [...new Set(configured.map((entry) => entry.directory))];
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      return 1;
+    }
     const instanceMode = parsed.schemaPath !== undefined || parsed.documentPath !== undefined;
     if (instanceMode) {
       if (!parsed.schemaPath || !parsed.documentPath) {
@@ -174,8 +187,8 @@ const command: CommandDescriptor = {
         console.error('Run "schema-validate --help" for usage.');
         return 2;
       }
-      if (!parsed.schemaRoot) {
-        console.error('--root is required in instance-validation mode.');
+      if (!parsed.schemaRoot && schemaRoots.length === 0) {
+        console.error('--root or at least one registered schema directory is required in instance-validation mode.');
         console.error('Run "schema-validate --help" for usage.');
         return 2;
       }
@@ -184,13 +197,13 @@ const command: CommandDescriptor = {
         console.error('Run "schema-validate --help" for usage.');
         return 2;
       }
-      const report = await validateInstanceFile(parsed.schemaPath, parsed.documentPath, parsed.schemaRoot);
+      const report = await validateInstanceFile(parsed.schemaPath, parsed.documentPath, parsed.schemaRoot, schemaRoots);
       if (parsed.json) console.log(JSON.stringify(report, null, 2));
       else printInstanceReport(report);
       return report.valid ? 0 : 1;
     }
     if (parsed.paths.length === 0) return help();
-    const reports = await Promise.all(parsed.paths.map((path) => new SchemaValidator({ schemaRoot: parsed.schemaRoot }).validateFile(path)));
+    const reports = await Promise.all(parsed.paths.map((path) => new SchemaValidator({ schemaRoot: parsed.schemaRoot, schemaRoots }).validateFile(path)));
     if (parsed.json) console.log(JSON.stringify({ valid: reports.every((report) => report.valid), reports }, null, 2));
     else reports.forEach(printReport);
     return reports.every((report) => report.valid) ? 0 : 1;

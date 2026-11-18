@@ -18,6 +18,10 @@
     "./validator": {
       "types": "./dist/core/schema/validator.d.ts",
       "import": "./dist/core/schema/validator.js"
+    },
+    "./registry": {
+      "types": "./dist/core/schema/registry.d.ts",
+      "import": "./dist/core/schema/registry.js"
     }
   },
   "files": [

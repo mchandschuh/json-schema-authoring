@@ -16,6 +16,7 @@ export interface InstanceValidationReport {
 export interface AsyncInstanceValidationOptions {
   readonly documentPath: string;
   readonly schemaRoot?: string;
+  readonly schemaRoots?: readonly string[];
 }
 
 function normalizeError(error: ErrorObject): InstanceValidationError {
@@ -56,7 +57,7 @@ export class SchemaInstanceValidator {
 
   async validateAsync(schema: unknown, instance: unknown, options: AsyncInstanceValidationOptions): Promise<InstanceValidationReport> {
     try {
-      const resolver = new LocalSchemaResolver({ documentPath: options.documentPath, rootSchema: schema, schemaRoot: options.schemaRoot });
+      const resolver = new LocalSchemaResolver({ documentPath: options.documentPath, rootSchema: schema, schemaRoot: options.schemaRoot, schemaRoots: options.schemaRoots });
       const ajv = new Ajv2020({
         allErrors: true,
         strict: false,
