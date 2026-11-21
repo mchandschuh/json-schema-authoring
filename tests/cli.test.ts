@@ -84,6 +84,7 @@ describe('schema-validate CLI', () => {
       expect(output.join('\n')).toContain('--json');
       expect(output.join('\n')).toContain('--root <directory>');
       expect(output.join('\n')).toContain('--document <document.json|document.yaml>');
+      expect(output.join('\n')).toContain('Usage: schema-validate resolve <schema-type> [options]');
     } finally { console.log = original; }
   });
 
@@ -93,6 +94,40 @@ describe('schema-validate CLI', () => {
     expect(result.exitCode).toBe(0);
     expect(result.output.join('\n')).toContain('Usage: schema-validate --root <directory>');
     expect(result.errors).toEqual([]);
+  });
+
+  it('resolves a complete schema document from the local registry without network access', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'schema-cli-resolve-'));
+    const home = join(root, 'home');
+    const schemas = join(root, 'schemas');
+    await mkdir(schemas, { recursive: true });
+    const schemaPath = join(schemas, 'commit-manifest.schema.json');
+    await writeFile(schemaPath, JSON.stringify({
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      $id: 'https://schemas.1konto.dev/devops-google/commit-specs/commit-manifest.schema.json',
+      title: 'Commit manifest',
+      type: 'object',
+    }), 'utf8');
+    const originalHome = process.env.HOME;
+    const originalFetch = globalThis.fetch;
+    process.env.HOME = home;
+    globalThis.fetch = (() => {
+      throw new Error('resolve must not use network access');
+    }) as typeof fetch;
+    try {
+      const add = await invoke(['registry', 'add', schemas, '--json']);
+      expect(add.exitCode).toBe(0);
+      const result = await invoke(['resolve', 'commit-manifest.schema.json']);
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.output.join('\n'))).toMatchObject({
+        $id: 'https://schemas.1konto.dev/devops-google/commit-specs/commit-manifest.schema.json',
+      });
+      expect(result.errors).toEqual([]);
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('validates one or more files and emits JSON output', async () => {
