@@ -17,7 +17,8 @@ reused for both schema authoring checks and instance validation.
 - Lists configured directories and the schemas they contain.
 - Resolves complete schema documents from the local registered schema catalog.
 - Supports human-readable and machine-readable JSON output.
-- Exposes reusable validator, instance-validator, and registry modules.
+- Exposes reusable schema loading, lookup, validation, instance-validator, and
+  registry APIs.
 
 ## Requirements
 
@@ -233,6 +234,23 @@ npm run build
 The test suite uses Vitest and covers the document parser, authoring rules,
 validators, CLI behavior, registry configuration, schema listing, and registered
 cross-directory references.
+
+### JavaScript and TypeScript API
+
+The package root exports convenience functions for common schema operations:
+
+```ts
+import { findSchema, loadSchema, validateSchema } from 'schema-validate';
+
+const report = validateSchema(JSON.stringify(schema));
+const resolved = await findSchema({ schemaType: 'task-envelope', version: 1 });
+const loaded = await loadSchema(resolved.path);
+```
+
+`findSchema` searches the local registered schema catalog and requires exactly one
+match. `loadSchema` reads local JSON documents and never performs network retrieval.
+`validateSchema` accepts either JSON text or an already-parsed value and returns the
+same `ValidationReport` shape as `SchemaValidator`.
 
 Useful repository links:
 

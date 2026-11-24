@@ -11,6 +11,10 @@
     "schema-validate": "./bin/schema-validate.js"
   },
   "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
     "./instance": {
       "types": "./dist/core/schema/instance.d.ts",
       "import": "./dist/core/schema/instance.js"
@@ -26,6 +30,10 @@
     "./resolve": {
       "types": "./dist/core/schema/resolve.d.ts",
       "import": "./dist/core/schema/resolve.js"
+    },
+    "./resolver": {
+      "types": "./dist/core/schema/resolver.d.ts",
+      "import": "./dist/core/schema/resolver.js"
     }
   },
   "files": [

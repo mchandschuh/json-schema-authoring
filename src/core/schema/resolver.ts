@@ -14,6 +14,19 @@ export interface SchemaResolverOptions {
   readonly schemaRoots?: readonly string[];
 }
 
+export interface LoadSchemaOptions {
+  /** Path of the document that contains the reference, when resolving URI references. */
+  readonly documentPath?: string;
+  /** Root schema used to resolve absolute identifiers, when resolving URI references. */
+  readonly rootSchema?: unknown;
+  /** Directory containing the complete local schema collection. */
+  readonly schemaRoot?: string;
+  /** Additional trusted directories containing registered schemas. */
+  readonly schemaRoots?: readonly string[];
+  /** Base directory for a relative schema URI. Defaults to the current working directory. */
+  readonly baseDirectory?: string;
+}
+
 export interface SchemaRegistry {
   addSchema(schema: Record<string, unknown>, key?: string): unknown;
   getSchema?(key: string): unknown;
@@ -256,4 +269,57 @@ export class LocalSchemaResolver {
     }
     return normalized;
   }
+}
+
+function localPathFor(uri: string, baseDirectory: string): string | undefined {
+  const withoutHash = withoutFragment(uri);
+  if (withoutHash.startsWith('file:')) return resolve(fileURLToPath(new URL(withoutHash)));
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(withoutHash)) return undefined;
+  return resolve(baseDirectory, decodePath(withoutHash));
+}
+
+async function readSchemaFile(schemaUri: string, path: string): Promise<Record<string, unknown>> {
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (error) {
+    throw new Error(`Cannot load schema ${schemaUri} from ${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  let schema: unknown;
+  try {
+    schema = JSON.parse(raw) as unknown;
+  } catch (error) {
+    throw new Error(`Schema ${path} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!isSchemaObject(schema)) throw new Error(`Schema ${path} must be a JSON object.`);
+  return schema;
+}
+
+/**
+ * Load one local JSON Schema document. Network retrieval is never attempted.
+ * Resolver options can be supplied when the URI is an absolute local schema
+ * identifier indexed by one or more trusted schema roots.
+ */
+export async function loadSchema(schemaUri: string, options: LoadSchemaOptions = {}): Promise<Record<string, unknown>> {
+  const uri = schemaUri.trim();
+  if (!uri) throw new Error('A schema URI is required.');
+
+  const baseDirectory = resolve(options.baseDirectory ?? process.cwd());
+  const localPath = localPathFor(uri, baseDirectory);
+  const hasResolverContext = options.documentPath !== undefined
+    || options.rootSchema !== undefined
+    || options.schemaRoot !== undefined
+    || (options.schemaRoots?.length ?? 0) > 0;
+
+  if (localPath && !hasResolverContext) return readSchemaFile(uri, localPath);
+  if (!localPath && !hasResolverContext) throw new Error(`Network schema resolution is disabled for external URI: ${uri}`);
+
+  const resolver = new LocalSchemaResolver({
+    documentPath: options.documentPath ?? resolve(baseDirectory, '.schema-validate-root.json'),
+    rootSchema: options.rootSchema ?? {},
+    schemaRoot: options.schemaRoot,
+    schemaRoots: options.schemaRoots,
+  });
+  return resolver.load(uri);
 }

@@ -15,6 +15,11 @@ export interface SchemaValidatorOptions {
   readonly schemaRoots?: readonly string[];
 }
 
+export interface ValidateSchemaOptions extends SchemaValidatorOptions {
+  /** Path included in the report and used as the base for local references. */
+  readonly documentPath?: string;
+}
+
 function ajvMessage(errors: readonly ErrorObject[] | null | undefined): string {
   const error = errors?.[0];
   return error ? `${error.instancePath || '$'} ${error.message ?? 'is invalid'}` : 'JSON Schema meta-schema validation failed.';
@@ -128,6 +133,35 @@ export class SchemaValidator {
     for (const rule of this.#rules) findings.push(...rule.check({ schema, documentPath, validateInstance }));
     return findings;
   }
+}
+
+/**
+ * Validate JSON Schema content without first writing it to a file. JSON text is
+ * parsed as a document; already-parsed values are validated directly.
+ */
+export function validateSchema(content: unknown, options: ValidateSchemaOptions = {}): ValidationReport {
+  const documentPath = options.documentPath ?? '<content>';
+  let schema = content;
+  if (typeof content === 'string') {
+    try {
+      schema = JSON.parse(content) as unknown;
+    } catch (error) {
+      return {
+        path: documentPath,
+        valid: false,
+        findings: [{
+          code: 'INVALID_JSON',
+          rule: 'schema-parser',
+          path: documentPath,
+          message: `Invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+          severity: 'error',
+        }],
+      };
+    }
+  }
+
+  const { documentPath: _documentPath, ...validatorOptions } = options;
+  return new SchemaValidator(validatorOptions).validate(documentPath, schema);
 }
 
 export { DIALECT };

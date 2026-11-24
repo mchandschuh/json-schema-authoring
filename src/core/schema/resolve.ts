@@ -16,6 +16,21 @@ export interface ResolveSchemaOptions {
   readonly configuration?: SchemaRegistryConfiguration;
 }
 
+export interface FindSchemaOptions extends ResolveSchemaOptions {
+  /** Exact URI, URI fragment, or filename-like search text. */
+  readonly searchString?: string;
+  /** Alias for searchString. */
+  readonly search?: string;
+  /** Alias for searchString for callers that already have a schema URI. */
+  readonly schemaUri?: string;
+  /** Schema type to search for, optionally combined with version. */
+  readonly schemaType?: string;
+  /** Alias for schemaType. */
+  readonly type?: string;
+  /** Optional major version used with type/schemaType. */
+  readonly version?: string | number;
+}
+
 export interface ResolvedSchema {
   readonly id: string;
   readonly path: string;
@@ -60,4 +75,28 @@ export async function resolveRegisteredSchema(
   }
 
   return { id: match.id, path: match.path, schema: schema as Record<string, unknown> };
+}
+
+function searchStringFor(options: FindSchemaOptions): string {
+  const direct = options.searchString ?? options.search ?? options.schemaUri;
+  if (direct !== undefined) return direct;
+
+  const type = options.schemaType ?? options.type;
+  if (type !== undefined && options.version !== undefined) {
+    const version = String(options.version).replace(/^v/, '');
+    return `${type}/v${version}`;
+  }
+  if (type !== undefined) return type;
+  throw new SchemaResolutionError('findSchema requires a searchString, schemaUri, or schemaType.');
+}
+
+/** Find exactly one schema in the local registered schema catalog. */
+export async function findSchema(options: FindSchemaOptions): Promise<ResolvedSchema>;
+export async function findSchema(searchString: string, options?: ResolveSchemaOptions): Promise<ResolvedSchema>;
+export async function findSchema(
+  optionsOrSearchString: FindSchemaOptions | string,
+  resolveOptions: ResolveSchemaOptions = {},
+): Promise<ResolvedSchema> {
+  if (typeof optionsOrSearchString === 'string') return resolveRegisteredSchema(optionsOrSearchString, resolveOptions);
+  return resolveRegisteredSchema(searchStringFor(optionsOrSearchString), optionsOrSearchString);
 }
