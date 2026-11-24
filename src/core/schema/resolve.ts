@@ -1,6 +1,8 @@
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import {
-  listRegisteredSchemas,
+  listSchemasInDirectories,
+  listSchemasInDirectoriesSync,
   SchemaRegistryConfiguration,
   type RegisteredSchema,
 } from './registry.js';
@@ -14,6 +16,8 @@ export class SchemaResolutionError extends Error {
 
 export interface ResolveSchemaOptions {
   readonly configuration?: SchemaRegistryConfiguration;
+  /** Additional schema directories to search alongside configured registry directories. */
+  readonly schemaRoots?: readonly string[];
 }
 
 export interface FindSchemaOptions extends ResolveSchemaOptions {
@@ -37,21 +41,13 @@ export interface ResolvedSchema {
   readonly schema: Record<string, unknown>;
 }
 
-/**
- * Resolve a schema from the local registry catalog used by the `list` command.
- * The input is intentionally a substring: callers may provide a complete URI,
- * a namespace/type/version suffix, or a filename-like schema type.
- */
-export async function resolveRegisteredSchema(
-  searchString: string,
-  options: ResolveSchemaOptions = {},
-): Promise<ResolvedSchema> {
+function searchValue(searchString: string): string {
   const search = searchString.trim();
   if (!search) throw new SchemaResolutionError('A schema type is required.');
+  return search;
+}
 
-  const configuration = options.configuration ?? new SchemaRegistryConfiguration();
-  const directories = await configuration.list('all');
-  const schemas = await listRegisteredSchemas(directories);
+function matchingSchemas(search: string, schemas: readonly RegisteredSchema[]): RegisteredSchema {
   const matches = schemas.filter(({ id: fullUri }) => fullUri.includes(search));
 
   if (matches.length === 0) {
@@ -63,18 +59,99 @@ export async function resolveRegisteredSchema(
     );
   }
 
-  const [match] = matches as [RegisteredSchema];
+  return matches[0]!;
+}
+
+function rootsFor(options: ResolveSchemaOptions, configured: readonly { readonly directory: string }[]): readonly string[] {
+  return [...new Set([
+    ...(options.schemaRoots ?? []),
+    ...configured.map(({ directory }) => directory),
+  ])];
+}
+
+async function schemasFor(options: ResolveSchemaOptions): Promise<readonly RegisteredSchema[]> {
+  const configuration = options.configuration ?? new SchemaRegistryConfiguration();
+  const configured = await configuration.list('all');
+  return listSchemasInDirectories(rootsFor(options, configured));
+}
+
+function schemasForSync(options: ResolveSchemaOptions): readonly RegisteredSchema[] {
+  const configuration = options.configuration ?? new SchemaRegistryConfiguration();
+  const configured = configuration.listSync('all');
+  return listSchemasInDirectoriesSync(rootsFor(options, configured));
+}
+
+async function readResolvedSchema(match: RegisteredSchema): Promise<ResolvedSchema> {
   let schema: unknown;
   try {
     schema = JSON.parse(await readFile(match.path, 'utf8')) as unknown;
   } catch (error) {
     throw new SchemaResolutionError(`Cannot read registered schema ${match.path}: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
+  if (!isRecordSchema(schema)) {
     throw new SchemaResolutionError(`Registered schema ${match.path} must contain a JSON object.`);
   }
+  return { id: match.id, path: match.path, schema };
+}
 
-  return { id: match.id, path: match.path, schema: schema as Record<string, unknown> };
+function readResolvedSchemaSync(match: RegisteredSchema): ResolvedSchema {
+  let schema: unknown;
+  try {
+    schema = JSON.parse(readFileSync(match.path, 'utf8')) as unknown;
+  } catch (error) {
+    throw new SchemaResolutionError(`Cannot read registered schema ${match.path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!isRecordSchema(schema)) {
+    throw new SchemaResolutionError(`Registered schema ${match.path} must contain a JSON object.`);
+  }
+  return { id: match.id, path: match.path, schema };
+}
+
+function isRecordSchema(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Resolve a schema from the local registry catalog used by the `list` command.
+ * The input is intentionally a substring: callers may provide a complete URI,
+ * a namespace/type/version suffix, or a filename-like schema type.
+ */
+export async function resolveRegisteredSchema(
+  searchString: string,
+  options: ResolveSchemaOptions = {},
+): Promise<ResolvedSchema> {
+  const [result] = await resolveRegisteredSchemas([searchString], options);
+  return result!;
+}
+
+/** Resolve one schema from the local registry using blocking filesystem access. */
+export function resolveRegisteredSchemaSync(
+  searchString: string,
+  options: ResolveSchemaOptions = {},
+): ResolvedSchema {
+  const [result] = resolveRegisteredSchemasSync([searchString], options);
+  return result!;
+}
+
+/** Resolve multiple schemas from one local registry scan. */
+export async function resolveRegisteredSchemas(
+  searchStrings: readonly string[],
+  options: ResolveSchemaOptions = {},
+): Promise<readonly ResolvedSchema[]> {
+  const searches = searchStrings.map(searchValue);
+  const schemas = await schemasFor(options);
+  const matches = searches.map((search) => matchingSchemas(search, schemas));
+  return Promise.all(matches.map(readResolvedSchema));
+}
+
+/** Resolve multiple schemas from one blocking local registry scan. */
+export function resolveRegisteredSchemasSync(
+  searchStrings: readonly string[],
+  options: ResolveSchemaOptions = {},
+): readonly ResolvedSchema[] {
+  const searches = searchStrings.map(searchValue);
+  const schemas = schemasForSync(options);
+  return searches.map((search) => readResolvedSchemaSync(matchingSchemas(search, schemas)));
 }
 
 function searchStringFor(options: FindSchemaOptions): string {

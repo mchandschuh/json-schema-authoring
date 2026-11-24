@@ -1,3 +1,4 @@
+import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { lstat, mkdir, readdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
@@ -41,6 +42,11 @@ interface ConfigRoot {
 
 interface RegistryConfigDocument {
   readonly [key: string]: unknown;
+}
+
+interface SchemaScanDirectory {
+  readonly directory: string;
+  readonly location?: RegistryConfigLocation;
 }
 
 const CONFIG_FILE = 'config.json';
@@ -88,6 +94,19 @@ async function inspectRoot(root: ConfigRoot, create: boolean): Promise<boolean> 
   }
 }
 
+function inspectRootSync(root: ConfigRoot, create: boolean): boolean {
+  if (create && !root.required) mkdirSync(root.directory, { recursive: true });
+  try {
+    const info = lstatSync(root.directory);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new SchemaRegistryConfigurationError(`Configuration ${root.location} root must be a real directory: ${root.directory}`);
+    return true;
+  } catch (error) {
+    if (error instanceof SchemaRegistryConfigurationError) throw error;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !root.required) return false;
+    throw new SchemaRegistryConfigurationError(`Configuration ${root.location} root could not be inspected: ${root.directory}`);
+  }
+}
+
 function rootsFor(selection: RegistryConfigSelection, options: RegistryConfigurationOptions): readonly ConfigRoot[] {
   if (selection === 'all') {
     const roots = [rootFor('app', options), rootFor('home', options)];
@@ -100,6 +119,17 @@ function rootsFor(selection: RegistryConfigSelection, options: RegistryConfigura
 async function readDocument(root: ConfigRoot): Promise<RegistryConfigDocument> {
   try {
     const source = await readFile(root.configPath, 'utf8');
+    return jsonObject(JSON.parse(source) as unknown, `Configuration file ${root.configPath}`);
+  } catch (error) {
+    if (error instanceof SchemaRegistryConfigurationError) throw error;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw new SchemaRegistryConfigurationError(`Configuration file ${root.configPath} is not valid JSON.`);
+  }
+}
+
+function readDocumentSync(root: ConfigRoot): RegistryConfigDocument {
+  try {
+    const source = readFileSync(root.configPath, 'utf8');
     return jsonObject(JSON.parse(source) as unknown, `Configuration file ${root.configPath}`);
   } catch (error) {
     if (error instanceof SchemaRegistryConfigurationError) throw error;
@@ -135,6 +165,17 @@ async function canonicalDirectory(path: string, description: string): Promise<st
   }
 }
 
+function canonicalDirectorySync(path: string, description: string): string {
+  try {
+    const info = lstatSync(path);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new SchemaRegistryConfigurationError(`${description} must be a real directory: ${path}`);
+    return realpathSync(path);
+  } catch (error) {
+    if (error instanceof SchemaRegistryConfigurationError) throw error;
+    throw new SchemaRegistryConfigurationError(`${description} does not exist or cannot be read: ${path}`);
+  }
+}
+
 async function entriesFor(root: ConfigRoot, validateDirectories = true): Promise<RegisteredDirectory[]> {
   if (!(await inspectRoot(root, false))) return [];
   const document = await readDocument(root);
@@ -143,6 +184,20 @@ async function entriesFor(root: ConfigRoot, validateDirectories = true): Promise
     const directory = valuePath(root, value);
     const normalized = validateDirectories
       ? await canonicalDirectory(directory, `Registered schema directory in ${root.configPath}`)
+      : directory;
+    entries.push({ directory: normalized, location: root.location, configPath: root.configPath });
+  }
+  return entries;
+}
+
+function entriesForSync(root: ConfigRoot, validateDirectories = true): RegisteredDirectory[] {
+  if (!inspectRootSync(root, false)) return [];
+  const document = readDocumentSync(root);
+  const entries: RegisteredDirectory[] = [];
+  for (const value of configuredValues(document)) {
+    const directory = valuePath(root, value);
+    const normalized = validateDirectories
+      ? canonicalDirectorySync(directory, `Registered schema directory in ${root.configPath}`)
       : directory;
     entries.push({ directory: normalized, location: root.location, configPath: root.configPath });
   }
@@ -182,6 +237,12 @@ export class SchemaRegistryConfiguration {
     return entries.sort((left, right) => left.directory.localeCompare(right.directory) || left.location.localeCompare(right.location));
   }
 
+  listSync(selection: RegistryConfigSelection = 'all'): readonly RegisteredDirectory[] {
+    const entries: RegisteredDirectory[] = [];
+    for (const root of rootsFor(selection, this.#options)) entries.push(...entriesForSync(root));
+    return entries.sort((left, right) => left.directory.localeCompare(right.directory) || left.location.localeCompare(right.location));
+  }
+
   async add(directory: string, location: RegistryConfigLocation = 'home'): Promise<{ readonly entry: RegisteredDirectory; readonly added: boolean }> {
     const root = rootFor(location, this.#options);
     await inspectRoot(root, true);
@@ -218,6 +279,10 @@ export class SchemaRegistryConfiguration {
   async directories(selection: RegistryConfigSelection = 'all'): Promise<readonly RegisteredDirectory[]> {
     return this.list(selection);
   }
+
+  directoriesSync(selection: RegistryConfigSelection = 'all'): readonly RegisteredDirectory[] {
+    return this.listSync(selection);
+  }
 }
 
 async function filesUnder(directory: string, output: string[]): Promise<void> {
@@ -229,7 +294,16 @@ async function filesUnder(directory: string, output: string[]): Promise<void> {
   }
 }
 
-export async function listRegisteredSchemas(entries: readonly RegisteredDirectory[]): Promise<readonly RegisteredSchema[]> {
+function filesUnderSync(directory: string, output: string[]): void {
+  const entries = readdirSync(directory, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) filesUnderSync(path, output);
+    else if (entry.isFile() && entry.name.endsWith('.json')) output.push(path);
+  }
+}
+
+async function listSchemas(entries: readonly SchemaScanDirectory[]): Promise<readonly RegisteredSchema[]> {
   const byPath = new Map<string, RegisteredSchema>();
   for (const entry of entries) {
     const files: string[] = [];
@@ -244,7 +318,7 @@ export async function listRegisteredSchemas(entries: readonly RegisteredDirector
       if (!isSchemaObject(schema) || typeof schema.$id !== 'string' || schema.$id.trim().length === 0) continue;
       const previous = byPath.get(path);
       const locationsForPath = new Set(previous?.locations ?? []);
-      locationsForPath.add(entry.location);
+      if (entry.location) locationsForPath.add(entry.location);
       byPath.set(path, {
         id: schema.$id,
         path,
@@ -254,5 +328,48 @@ export async function listRegisteredSchemas(entries: readonly RegisteredDirector
     }
   }
   return [...byPath.values()].sort((left, right) => left.id.localeCompare(right.id) || left.path.localeCompare(right.path));
+}
+
+function listSchemasSync(entries: readonly SchemaScanDirectory[]): readonly RegisteredSchema[] {
+  const byPath = new Map<string, RegisteredSchema>();
+  for (const entry of entries) {
+    const files: string[] = [];
+    filesUnderSync(entry.directory, files);
+    for (const path of files) {
+      let schema: unknown;
+      try {
+        schema = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+      } catch {
+        continue;
+      }
+      if (!isSchemaObject(schema) || typeof schema.$id !== 'string' || schema.$id.trim().length === 0) continue;
+      const previous = byPath.get(path);
+      const locationsForPath = new Set(previous?.locations ?? []);
+      if (entry.location) locationsForPath.add(entry.location);
+      byPath.set(path, {
+        id: schema.$id,
+        path,
+        directory: previous?.directory ?? entry.directory,
+        locations: [...locationsForPath].sort(),
+      });
+    }
+  }
+  return [...byPath.values()].sort((left, right) => left.id.localeCompare(right.id) || left.path.localeCompare(right.path));
+}
+
+export async function listRegisteredSchemas(entries: readonly RegisteredDirectory[]): Promise<readonly RegisteredSchema[]> {
+  return listSchemas(entries);
+}
+
+export function listRegisteredSchemasSync(entries: readonly RegisteredDirectory[]): readonly RegisteredSchema[] {
+  return listSchemasSync(entries);
+}
+
+export async function listSchemasInDirectories(directories: readonly string[]): Promise<readonly RegisteredSchema[]> {
+  return listSchemas(directories.map((directory) => ({ directory: resolve(directory) })));
+}
+
+export function listSchemasInDirectoriesSync(directories: readonly string[]): readonly RegisteredSchema[] {
+  return listSchemasSync(directories.map((directory) => ({ directory: resolve(directory) })));
 }
 

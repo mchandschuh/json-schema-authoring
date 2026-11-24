@@ -4,10 +4,12 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   listRegisteredSchemas,
+  listRegisteredSchemasSync,
   SchemaRegistryConfiguration,
 } from '../src/core/schema/registry.js';
-import { SchemaValidator } from '../src/core/schema/validator.js';
-import { validateInstanceAsync } from '../src/core/schema/instance.js';
+import { resolveRegisteredSchema } from '../src/core/schema/resolve.js';
+import { validateInstance, validateInstanceAsync } from '../src/core/schema/instance.js';
+import { SchemaValidator, validateSchema } from '../src/core/schema/validator.js';
 
 const childSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -29,6 +31,48 @@ async function directoriesFixture(): Promise<{ root: string; app: string; home: 
   await mkdir(env, { recursive: true });
   await writeFile(join(schemas, 'name.schema.json'), JSON.stringify(childSchema), 'utf8');
   return { root, app, home, env, schemas };
+}
+
+async function externalReferenceFixture(): Promise<{
+  readonly root: string;
+  readonly schemas: string;
+  readonly rootPath: string;
+  readonly childSchema: Record<string, unknown>;
+  readonly rootSchema: Record<string, unknown>;
+  readonly configuration: SchemaRegistryConfiguration;
+}> {
+  const fixture = await directoriesFixture();
+  const configuration = new SchemaRegistryConfiguration({
+    cwd: fixture.app,
+    homeDirectory: fixture.home,
+    environment: {},
+  });
+
+  await configuration.add(fixture.schemas, 'home');
+
+  const rootPath = join(fixture.root, 'root.schema.json');
+  const rootSchema = {
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    $id: 'https://schemas.example.test/root/v1/root',
+    title: 'Root',
+    description: 'A root schema that references a registered schema.',
+    type: 'object',
+    properties: {
+      name: { $ref: childSchema.$id },
+    },
+    required: ['name'],
+    additionalProperties: false,
+  };
+  await writeFile(rootPath, JSON.stringify(rootSchema), 'utf8');
+
+  return {
+    root: fixture.root,
+    schemas: fixture.schemas,
+    rootPath,
+    childSchema,
+    rootSchema,
+    configuration,
+  };
 }
 
 describe('schema registry configuration', () => {
@@ -61,6 +105,12 @@ describe('schema registry configuration', () => {
 
     const entries = await configuration.list('all');
     await expect(listRegisteredSchemas(entries)).resolves.toEqual([{
+      id: childSchema.$id,
+      path: join(fixture.schemas, 'name.schema.json'),
+      directory: fixture.schemas,
+      locations: ['home'],
+    }]);
+    expect(listRegisteredSchemasSync(configuration.listSync('all'))).toEqual([{
       id: childSchema.$id,
       path: join(fixture.schemas, 'name.schema.json'),
       directory: fixture.schemas,
@@ -128,5 +178,48 @@ describe('registered schema reference resolution', () => {
     await writeFile(rootPath, JSON.stringify(schema), 'utf8');
 
     await expect(new SchemaValidator({ schemaRoots: [legacyDirectory] }).validateFile(rootPath)).resolves.toMatchObject({ valid: true, findings: [] });
+  });
+
+  it('fails to synchronously validate a schema with a registry-accessible external reference', async () => {
+    const fixture = await externalReferenceFixture();
+
+    await expect(
+      resolveRegisteredSchema(fixture.childSchema.$id as string, { configuration: fixture.configuration }),
+    ).resolves.toMatchObject({ schema: fixture.childSchema });
+
+    const report = validateSchema(fixture.rootSchema, {
+      documentPath: fixture.rootPath,
+      schemaRoots: [fixture.schemas],
+      rules: [],
+    });
+
+    expect(report.valid).toBe(false);
+    expect(report.findings).toHaveLength(1);
+    expect(report.findings[0]).toMatchObject({
+      code: 'SCHEMA_COMPILE_ERROR',
+      rule: 'schema-parser',
+      path: '$',
+      severity: 'error',
+    });
+    expect(report.findings[0]?.message).toContain(fixture.childSchema.$id as string);
+  });
+
+  it('fails to synchronously validate an instance against a schema with a registry-accessible external reference', async () => {
+    const fixture = await externalReferenceFixture();
+
+    await expect(
+      resolveRegisteredSchema(fixture.childSchema.$id as string, { configuration: fixture.configuration }),
+    ).resolves.toMatchObject({ schema: fixture.childSchema });
+
+    const report = validateInstance(fixture.rootSchema, { name: 'Ada' });
+
+    expect(report.valid).toBe(false);
+    expect(report.errors).toHaveLength(1);
+    expect(report.errors[0]).toMatchObject({
+      instancePath: '$',
+      keyword: 'schema',
+      params: {},
+    });
+    expect(report.errors[0]?.message).toContain(fixture.childSchema.$id as string);
   });
 });

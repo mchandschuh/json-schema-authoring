@@ -4,6 +4,9 @@ export type { LoadSchemaOptions } from './core/schema/resolver.js';
 export {
   findSchema,
   resolveRegisteredSchema,
+  resolveRegisteredSchemaSync,
+  resolveRegisteredSchemas,
+  resolveRegisteredSchemasSync,
   SchemaResolutionError,
 } from './core/schema/resolve.js';
 export type {
