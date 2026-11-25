@@ -338,7 +338,6 @@ export class CachedRegistrySchemaResolver {
       if (entry.path === path || entry.canonicalUri === withoutFragment(value) || key.endsWith(`\u0000${withoutFragment(value)}`)) cachedEntries.add(entry);
     }
     for (const entry of cachedEntries) this.#removeCached(entry);
-    this.#indexes.clear();
     this.#indexPromises.clear();
   }
 
@@ -457,7 +456,7 @@ export class CachedRegistrySchemaResolver {
     if (existing) return existing;
     const byId = new Map<string, string>();
     const byPath = new Map<string, Record<string, unknown>>();
-    for (const root of session.roots) this.#scanDirectorySync(root, byId, byPath, session.context?.documentPath);
+    for (const root of session.roots) this.#scanDirectorySync(root, byId, byPath);
     const index = { scopeKey: session.scope, roots: session.roots, byId, byPath };
     this.#indexes.set(session.scope, index);
     return index;
@@ -472,7 +471,7 @@ export class CachedRegistrySchemaResolver {
     const promise = (async () => {
       const byId = new Map<string, string>();
       const byPath = new Map<string, Record<string, unknown>>();
-      for (const root of session.roots) await this.#scanDirectory(root, byId, byPath, session.context?.documentPath, generation);
+      for (const root of session.roots) await this.#scanDirectory(root, byId, byPath, generation);
       const index = { scopeKey: session.scope, roots: session.roots, byId, byPath };
       if (generation === this.#generation) this.#indexes.set(session.scope, index);
       return index;
@@ -485,7 +484,7 @@ export class CachedRegistrySchemaResolver {
     }
   }
 
-  #scanDirectorySync(directory: string, byId: Map<string, string>, byPath: Map<string, Record<string, unknown>>, documentPath?: string): void {
+  #scanDirectorySync(directory: string, byId: Map<string, string>, byPath: Map<string, Record<string, unknown>>): void {
     let entries: readonly CachedRegistrySchemaDirectoryEntry[];
     try {
       entries = [...this.#fileSystem.readdirSync(directory)].sort((left, right) => left.name.localeCompare(right.name));
@@ -494,12 +493,12 @@ export class CachedRegistrySchemaResolver {
     }
     for (const entry of entries) {
       const path = resolvePath(directory, entry.name);
-      if (entry.isDirectory()) this.#scanDirectorySync(path, byId, byPath, documentPath);
-      else if (entry.isFile() && entry.name.endsWith('.json') && path !== documentPath) this.#indexFileSync(path, byId, byPath);
+      if (entry.isDirectory()) this.#scanDirectorySync(path, byId, byPath);
+      else if (entry.isFile() && entry.name.endsWith('.json')) this.#indexFileSync(path, byId, byPath);
     }
   }
 
-  async #scanDirectory(directory: string, byId: Map<string, string>, byPath: Map<string, Record<string, unknown>>, documentPath?: string, generation = this.#generation): Promise<void> {
+  async #scanDirectory(directory: string, byId: Map<string, string>, byPath: Map<string, Record<string, unknown>>, generation = this.#generation): Promise<void> {
     let entries: readonly CachedRegistrySchemaDirectoryEntry[];
     try {
       entries = [...await this.#fileSystem.readdir(directory)].sort((left, right) => left.name.localeCompare(right.name));
@@ -508,17 +507,20 @@ export class CachedRegistrySchemaResolver {
     }
     for (const entry of entries) {
       const path = resolvePath(directory, entry.name);
-      if (entry.isDirectory()) await this.#scanDirectory(path, byId, byPath, documentPath, generation);
-      else if (entry.isFile() && entry.name.endsWith('.json') && path !== documentPath) await this.#indexFile(path, byId, byPath, generation);
+      if (entry.isDirectory()) await this.#scanDirectory(path, byId, byPath, generation);
+      else if (entry.isFile() && entry.name.endsWith('.json')) await this.#indexFile(path, byId, byPath, generation);
     }
   }
 
   #indexFileSync(path: string, byId: Map<string, string>, byPath: Map<string, Record<string, unknown>>): void {
-    let schema: unknown;
-    try {
-      schema = JSON.parse(this.#fileSystem.readFileSync(path)) as unknown;
-    } catch {
-      return;
+    const cached = this.#documentCache.get(path);
+    let schema: unknown = cached?.schema;
+    if (!schema) {
+      try {
+        schema = JSON.parse(this.#fileSystem.readFileSync(path)) as unknown;
+      } catch {
+        return;
+      }
     }
     if (!isSchemaObject(schema)) return;
     const id = schemaId(schema);
@@ -531,11 +533,14 @@ export class CachedRegistrySchemaResolver {
   }
 
   async #indexFile(path: string, byId: Map<string, string>, byPath: Map<string, Record<string, unknown>>, generation = this.#generation): Promise<void> {
-    let schema: unknown;
-    try {
-      schema = JSON.parse(await this.#fileSystem.readFile(path)) as unknown;
-    } catch {
-      return;
+    const cached = this.#documentCache.get(path);
+    let schema: unknown = cached?.schema;
+    if (!schema) {
+      try {
+        schema = JSON.parse(await this.#fileSystem.readFile(path)) as unknown;
+      } catch {
+        return;
+      }
     }
     if (!isSchemaObject(schema)) return;
     const id = schemaId(schema);
