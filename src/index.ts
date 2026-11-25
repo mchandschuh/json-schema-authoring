@@ -32,7 +32,6 @@ export {
   validateInstanceAsync,
 } from './core/schema/instance.js';
 export type {
-  AsyncInstanceValidationOptions,
   InstanceValidationOptions,
   InstanceValidationError,
   InstanceValidationReport,

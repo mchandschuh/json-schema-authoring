@@ -15,13 +15,9 @@ export interface InstanceValidationReport {
 }
 
 export interface InstanceValidationOptions {
-  readonly documentPath?: string;
+  readonly documentPath: string;
   readonly schemaRoots?: readonly string[];
   readonly schemaResolver?: SchemaResolver;
-}
-
-export interface AsyncInstanceValidationOptions extends InstanceValidationOptions {
-  readonly documentPath: string;
 }
 
 export interface SchemaInstanceValidatorOptions {
@@ -44,13 +40,12 @@ export class SchemaInstanceValidator {
     this.#schemaResolver = options.schemaResolver ?? getDefaultCachedRegistrySchemaResolver();
   }
 
-  validate(schema: unknown, instance: unknown, options: InstanceValidationOptions = {}): InstanceValidationReport {
+  validate(schema: unknown, instance: unknown, options: InstanceValidationOptions): InstanceValidationReport {
     let compiled: ValidateFunction;
     try {
       const ajv = this.#createAjv();
-      const documentPath = options.documentPath ?? '<instance>';
       const resolver = options.schemaResolver ?? this.#schemaResolver;
-      const context = { documentPath, rootSchema: schema, schemaRoots: options.schemaRoots ?? [] };
+      const context = { documentPath: options.documentPath, rootSchema: schema, schemaRoots: options.schemaRoots ?? [] };
       resolver.registerSync(ajv, context);
       compiled = ajv.compile(schema as Record<string, unknown>);
     } catch (error) {
@@ -69,7 +64,7 @@ export class SchemaInstanceValidator {
     return { valid: false, errors: (compiled.errors ?? []).map(normalizeError) };
   }
 
-  async validateAsync(schema: unknown, instance: unknown, options: AsyncInstanceValidationOptions): Promise<InstanceValidationReport> {
+  async validateAsync(schema: unknown, instance: unknown, options: InstanceValidationOptions): Promise<InstanceValidationReport> {
     try {
       const resolver = options.schemaResolver ?? this.#schemaResolver;
       const context = { documentPath: options.documentPath, rootSchema: schema, schemaRoots: options.schemaRoots ?? [] };
@@ -101,10 +96,10 @@ export class SchemaInstanceValidator {
   }
 }
 
-export function validateInstance(schema: unknown, instance: unknown, options: InstanceValidationOptions = {}): InstanceValidationReport {
+export function validateInstance(schema: unknown, instance: unknown, options: InstanceValidationOptions): InstanceValidationReport {
   return new SchemaInstanceValidator({ schemaResolver: options.schemaResolver }).validate(schema, instance, options);
 }
 
-export async function validateInstanceAsync(schema: unknown, instance: unknown, options: AsyncInstanceValidationOptions): Promise<InstanceValidationReport> {
+export async function validateInstanceAsync(schema: unknown, instance: unknown, options: InstanceValidationOptions): Promise<InstanceValidationReport> {
   return new SchemaInstanceValidator().validateAsync(schema, instance, options);
 }

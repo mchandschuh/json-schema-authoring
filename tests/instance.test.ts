@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { validateInstance, validateInstanceAsync } from '../src/core/schema/instance.js';
+import { SchemaInstanceValidator, validateInstance, validateInstanceAsync } from '../src/core/schema/instance.js';
 import type { SchemaResolver } from '../src/core/schema/resolver-contract.js';
 
 describe('instance validation API', () => {
@@ -58,12 +58,39 @@ describe('instance validation API', () => {
     ]);
   });
 
+  it('uses a constructor resolver by default and a per-call resolver override when supplied', () => {
+    const calls: string[] = [];
+    const childSchema = { $id: 'https://schemas.example.test/instance/precedence-child', type: 'string' };
+    const rootSchema = {
+      $id: 'https://schemas.example.test/instance/precedence-root',
+      type: 'object',
+      properties: { child: { $ref: childSchema.$id } },
+    };
+    const resolver = (name: string): SchemaResolver => ({
+      registerSync: (ajv) => {
+        calls.push(name);
+        ajv.addSchema(childSchema);
+      },
+      register: async () => undefined,
+      createLoadSchema: async () => childSchema,
+    });
+    const constructorResolver = resolver('constructor');
+    const callResolver = resolver('call');
+    const instanceValidator = new SchemaInstanceValidator({
+      schemaResolver: constructorResolver,
+    });
+
+    expect(instanceValidator.validate(rootSchema, { child: 'ok' }, { documentPath: '/precedence/root.json' })).toEqual({ valid: true, errors: [] });
+    expect(instanceValidator.validate(rootSchema, { child: 'ok' }, { documentPath: '/precedence/root.json', schemaResolver: callResolver })).toEqual({ valid: true, errors: [] });
+    expect(calls).toEqual(['constructor', 'call']);
+  });
+
   it('validates a compatible instance', () => {
-    expect(validateInstance(schema, { name: 'valid' })).toEqual({ valid: true, errors: [] });
+    expect(validateInstance(schema, { name: 'valid' }, { documentPath: '<instance>' })).toEqual({ valid: true, errors: [] });
   });
 
   it('returns structured errors for an invalid instance', () => {
-    const result = validateInstance(schema, { name: 42 });
+    const result = validateInstance(schema, { name: 42 }, { documentPath: '<instance>' });
     expect(result.valid).toBe(false);
     expect(result.errors[0]?.instancePath).toBe('/name');
   });
