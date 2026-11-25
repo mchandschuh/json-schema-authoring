@@ -25,3 +25,19 @@ export type {
   ValidateSchemaOptions,
   ValidationReport,
 } from './core/schema/validator.js';
+
+export {
+  CachedRegistrySchemaResolver,
+  CachedRegistrySchemaResolverError,
+  createCachedRegistrySchemaResolver,
+  getDefaultCachedRegistrySchemaResolver,
+} from './core/schema/cached-registry-schema-resolver.js';
+export type {
+  CachedRegistrySchemaAjv,
+  CachedRegistrySchemaDirectoryEntry,
+  CachedRegistrySchemaFileSystem,
+  CachedRegistrySchemaResolution,
+  CachedRegistrySchemaResolutionContext,
+  CachedRegistrySchemaResolverErrorCode,
+  CachedRegistrySchemaResolverOptions,
+} from './core/schema/cached-registry-schema-resolver.js';
