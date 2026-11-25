@@ -27,7 +27,7 @@ export interface LoadSchemaOptions {
   readonly baseDirectory?: string;
 }
 
-export interface SchemaRegistry {
+export interface AjvSchemaRegistry {
   addSchema(schema: Record<string, unknown>, key?: string): unknown;
   getSchema?(key: string): unknown;
 }
@@ -120,7 +120,7 @@ export class LocalSchemaResolver {
   }
 
   /** Register indexed file aliases for synchronous child-example checks. */
-  async registerWith(registry: SchemaRegistry): Promise<void> {
+  async registerWith(registry: AjvSchemaRegistry): Promise<void> {
     await this.#ensureIndex();
     for (const [path, schema] of this.#indexedSchemas) {
       if (typeof schema.$schema === 'string' && schema.$schema !== DIALECT) continue;

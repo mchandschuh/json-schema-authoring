@@ -55,6 +55,18 @@ export type {
 } from './core/schema/cached-registry-schema-resolver.js';
 export type {
   SchemaResolver,
+  SchemaReferenceResolver,
   SchemaResolverAjv,
   SchemaResolverContext,
+  SchemaResolution,
 } from './core/schema/resolver-contract.js';
+
+export {
+  JsonSchemaRegistry,
+  createJsonSchemaRegistry,
+  getDefaultJsonSchemaRegistry,
+} from './core/schema/json-schema-registry.js';
+export type {
+  JsonSchemaRegistryOptions,
+  JsonSchemaRegistryResolveOptions,
+} from './core/schema/json-schema-registry.js';

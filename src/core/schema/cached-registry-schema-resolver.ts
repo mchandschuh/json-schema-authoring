@@ -7,7 +7,7 @@ import { readFile, readdir, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { SchemaRegistryConfiguration } from './registry.js';
-import type { SchemaResolver, SchemaResolverAjv, SchemaResolverContext } from './resolver-contract.js';
+import type { SchemaResolution, SchemaResolver, SchemaResolverAjv, SchemaResolverContext } from './resolver-contract.js';
 import { isSchemaObject } from './types.js';
 
 const DIALECT = 'https://json-schema.org/draft/2020-12/schema';
@@ -61,12 +61,7 @@ export interface CachedRegistrySchemaResolverOptions {
 
 export type CachedRegistrySchemaResolutionContext = SchemaResolverContext;
 
-export interface CachedRegistrySchemaResolution {
-  readonly requestedUri: string;
-  readonly canonicalUri: string;
-  readonly path: string;
-  readonly schema: Record<string, unknown>;
-}
+export type CachedRegistrySchemaResolution = SchemaResolution;
 
 export type CachedRegistrySchemaAjv = SchemaResolverAjv;
 
