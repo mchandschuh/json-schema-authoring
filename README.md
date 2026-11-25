@@ -25,7 +25,7 @@ reused for both schema authoring checks and instance validation.
 - Node.js 22 or newer.
 - npm.
 
-## Install and run
+## Install and run the `schema-validate` CLI
 
 For repository development:
 
@@ -35,8 +35,23 @@ npm run build
 node ./bin/schema-validate.js --help
 ```
 
-The package exposes the `schema-validate` executable when installed or linked. The
-repository also includes an installer for the companion agent skill:
+The package exposes the `schema-validate` executable when installed or linked. Use
+`--help` for the complete command and option list, or `--version` to print the
+installed package version:
+
+```bash
+schema-validate --help
+schema-validate --version
+```
+
+The CLI supports four workflows:
+
+- Validate one or more JSON Schema 2020-12 documents with authoring-rule findings.
+- Validate a JSON or YAML instance against a local schema.
+- Add, remove, and inspect configured schema registry directories.
+- List registered schemas or resolve one complete schema document by its `$id`.
+
+The repository also includes an installer for the companion agent skill:
 
 ```bash
 ./scripts/install_agent_skill.mjs "$HOME/.cline/skills"
@@ -236,6 +251,56 @@ validators, CLI behavior, registry configuration, schema listing, and registered
 cross-directory references.
 
 ### JavaScript and TypeScript API
+
+#### Core registry exports for separate libraries
+
+The `JsonSchemaRegistry` facade and its option types are core public APIs. When a
+separate library re-exports these APIs from its own entry point, preserve the
+runtime exports and the type-only exports explicitly:
+
+```ts
+export {
+  JsonSchemaRegistry,
+  createJsonSchemaRegistry,
+  getDefaultJsonSchemaRegistry,
+} from './core/schema/json-schema-registry.js';
+export type {
+  JsonSchemaRegistryOptions,
+  JsonSchemaRegistryResolveOptions,
+} from './core/schema/json-schema-registry.js';
+```
+
+Consumers of the published package should import the same public APIs from the
+package root rather than reaching into an internal file:
+
+```ts
+import {
+  JsonSchemaRegistry,
+  createJsonSchemaRegistry,
+  getDefaultJsonSchemaRegistry,
+  type JsonSchemaRegistryOptions,
+  type JsonSchemaRegistryResolveOptions,
+} from 'schema-validate';
+```
+
+`JsonSchemaRegistryOptions` configures schema roots, registry configuration, an
+optional custom resolver, and authoring rules. `JsonSchemaRegistryResolveOptions`
+supplies the per-resolution document path, root schema, and additional schema roots.
+The registry provides synchronous and asynchronous resolution, schema lookup,
+schema validation, and instance validation through one facade:
+
+```ts
+const options: JsonSchemaRegistryOptions = {
+  schemaRoots: ['./schemas'],
+};
+const registry = createJsonSchemaRegistry(options);
+const resolveOptions: JsonSchemaRegistryResolveOptions = {
+  documentPath: './schemas/user.schema.json',
+};
+
+const resolved = await registry.resolve('https://schemas.example.test/user/v1', resolveOptions);
+const report = registry.validateSchema(schema);
+```
 
 The package root exports convenience functions for common schema operations:
 
