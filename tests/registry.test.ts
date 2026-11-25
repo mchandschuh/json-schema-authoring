@@ -180,7 +180,7 @@ describe('registered schema reference resolution', () => {
     await expect(new SchemaValidator({ schemaRoots: [legacyDirectory] }).validateFile(rootPath)).resolves.toMatchObject({ valid: true, findings: [] });
   });
 
-  it('fails to synchronously validate a schema with a registry-accessible external reference', async () => {
+  it('synchronously validates a schema with a registry-accessible external reference', async () => {
     const fixture = await externalReferenceFixture();
 
     await expect(
@@ -193,33 +193,25 @@ describe('registered schema reference resolution', () => {
       rules: [],
     });
 
-    expect(report.valid).toBe(false);
-    expect(report.findings).toHaveLength(1);
-    expect(report.findings[0]).toMatchObject({
-      code: 'SCHEMA_COMPILE_ERROR',
-      rule: 'schema-parser',
-      path: '$',
-      severity: 'error',
+    expect(report).toEqual({
+      path: fixture.rootPath,
+      valid: true,
+      findings: [],
     });
-    expect(report.findings[0]?.message).toContain(fixture.childSchema.$id as string);
   });
 
-  it('fails to synchronously validate an instance against a schema with a registry-accessible external reference', async () => {
+  it('synchronously validates an instance against a schema with a registry-accessible external reference', async () => {
     const fixture = await externalReferenceFixture();
 
     await expect(
       resolveRegisteredSchema(fixture.childSchema.$id as string, { configuration: fixture.configuration }),
     ).resolves.toMatchObject({ schema: fixture.childSchema });
 
-    const report = validateInstance(fixture.rootSchema, { name: 'Ada' });
-
-    expect(report.valid).toBe(false);
-    expect(report.errors).toHaveLength(1);
-    expect(report.errors[0]).toMatchObject({
-      instancePath: '$',
-      keyword: 'schema',
-      params: {},
+    const report = validateInstance(fixture.rootSchema, { name: 'Ada' }, {
+      documentPath: fixture.rootPath,
+      schemaRoots: [fixture.schemas],
     });
-    expect(report.errors[0]?.message).toContain(fixture.childSchema.$id as string);
+
+    expect(report).toEqual({ valid: true, errors: [] });
   });
 });

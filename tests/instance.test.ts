@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { validateInstance, validateInstanceAsync } from '../src/core/schema/instance.js';
+import type { SchemaResolver } from '../src/core/schema/resolver-contract.js';
 
 describe('instance validation API', () => {
   const schema = {
@@ -15,6 +16,47 @@ describe('instance validation API', () => {
       name: { type: 'string' },
     },
   };
+
+  it('accepts a custom resolver interface for synchronous and asynchronous instance validation', async () => {
+    const childSchema = {
+      $id: 'https://schemas.example.test/instance/custom-child',
+      type: 'string',
+    };
+    const rootSchema = {
+      $id: 'https://schemas.example.test/instance/custom-root',
+      type: 'object',
+      properties: { child: { $ref: childSchema.$id } },
+      required: ['child'],
+      additionalProperties: false,
+    };
+    const calls: string[] = [];
+    const customResolver: SchemaResolver = {
+      registerSync: (ajv, context) => {
+        calls.push(`sync:${context.documentPath}`);
+        ajv.addSchema(childSchema);
+      },
+      register: async (_ajv, context) => {
+        calls.push(`async:${context.documentPath}`);
+      },
+      createLoadSchema: (context) => async () => {
+        calls.push(`load:${context.documentPath}`);
+        return childSchema;
+      },
+    };
+    const options = {
+      documentPath: '/custom/instance.schema.json',
+      schemaRoots: ['/custom/root'],
+      schemaResolver: customResolver,
+    };
+
+    expect(validateInstance(rootSchema, { child: 'ok' }, options)).toEqual({ valid: true, errors: [] });
+    await expect(validateInstanceAsync(rootSchema, { child: 'ok' }, options)).resolves.toEqual({ valid: true, errors: [] });
+    expect(calls).toEqual([
+      'sync:/custom/instance.schema.json',
+      'async:/custom/instance.schema.json',
+      'load:/custom/instance.schema.json',
+    ]);
+  });
 
   it('validates a compatible instance', () => {
     expect(validateInstance(schema, { name: 'valid' })).toEqual({ valid: true, errors: [] });
@@ -69,8 +111,8 @@ describe('instance validation API', () => {
     };
     await writeFile(schemaPath, JSON.stringify(schema), 'utf8');
 
-    await expect(validateInstanceAsync(schema, { child: 'valid' }, { documentPath: schemaPath, schemaRoot })).resolves.toEqual({ valid: true, errors: [] });
-    const invalid = await validateInstanceAsync(schema, { child: 42 }, { documentPath: schemaPath, schemaRoot });
+    await expect(validateInstanceAsync(schema, { child: 'valid' }, { documentPath: schemaPath, schemaRoots: [schemaRoot] })).resolves.toEqual({ valid: true, errors: [] });
+    const invalid = await validateInstanceAsync(schema, { child: 42 }, { documentPath: schemaPath, schemaRoots: [schemaRoot] });
     expect(invalid.valid).toBe(false);
     expect(invalid.errors[0]?.instancePath).toBe('/child');
   });

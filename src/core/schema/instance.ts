@@ -1,5 +1,6 @@
 import { Ajv2020, type ErrorObject, type ValidateFunction } from 'ajv/dist/2020.js';
-import { LocalSchemaResolver } from './resolver.js';
+import { getDefaultCachedRegistrySchemaResolver } from './cached-registry-schema-resolver.js';
+import type { SchemaResolver } from './resolver-contract.js';
 
 export interface InstanceValidationError {
   readonly instancePath: string;
@@ -13,10 +14,18 @@ export interface InstanceValidationReport {
   readonly errors: readonly InstanceValidationError[];
 }
 
-export interface AsyncInstanceValidationOptions {
-  readonly documentPath: string;
-  readonly schemaRoot?: string;
+export interface InstanceValidationOptions {
+  readonly documentPath?: string;
   readonly schemaRoots?: readonly string[];
+  readonly schemaResolver?: SchemaResolver;
+}
+
+export interface AsyncInstanceValidationOptions extends InstanceValidationOptions {
+  readonly documentPath: string;
+}
+
+export interface SchemaInstanceValidatorOptions {
+  readonly schemaResolver?: SchemaResolver;
 }
 
 function normalizeError(error: ErrorObject): InstanceValidationError {
@@ -29,16 +38,21 @@ function normalizeError(error: ErrorObject): InstanceValidationError {
 }
 
 export class SchemaInstanceValidator {
-  readonly #ajv: Ajv2020;
+  readonly #schemaResolver: SchemaResolver;
 
-  constructor() {
-    this.#ajv = new Ajv2020({ allErrors: true, strict: false, validateSchema: true });
+  constructor(options: SchemaInstanceValidatorOptions = {}) {
+    this.#schemaResolver = options.schemaResolver ?? getDefaultCachedRegistrySchemaResolver();
   }
 
-  validate(schema: unknown, instance: unknown): InstanceValidationReport {
+  validate(schema: unknown, instance: unknown, options: InstanceValidationOptions = {}): InstanceValidationReport {
     let compiled: ValidateFunction;
     try {
-      compiled = this.#ajv.compile(schema as Record<string, unknown>);
+      const ajv = this.#createAjv();
+      const documentPath = options.documentPath ?? '<instance>';
+      const resolver = options.schemaResolver ?? this.#schemaResolver;
+      const context = { documentPath, rootSchema: schema, schemaRoots: options.schemaRoots ?? [] };
+      resolver.registerSync(ajv, context);
+      compiled = ajv.compile(schema as Record<string, unknown>);
     } catch (error) {
       return {
         valid: false,
@@ -57,14 +71,10 @@ export class SchemaInstanceValidator {
 
   async validateAsync(schema: unknown, instance: unknown, options: AsyncInstanceValidationOptions): Promise<InstanceValidationReport> {
     try {
-      const resolver = new LocalSchemaResolver({ documentPath: options.documentPath, rootSchema: schema, schemaRoot: options.schemaRoot, schemaRoots: options.schemaRoots });
-      const ajv = new Ajv2020({
-        allErrors: true,
-        strict: false,
-        validateSchema: true,
-        loadSchema: (uri) => resolver.load(uri),
-      });
-      await resolver.registerWith(ajv);
+      const resolver = options.schemaResolver ?? this.#schemaResolver;
+      const context = { documentPath: options.documentPath, rootSchema: schema, schemaRoots: options.schemaRoots ?? [] };
+      const ajv = this.#createAjv(resolver.createLoadSchema(context));
+      await resolver.register(ajv, context);
       const compiled = await ajv.compileAsync(schema as Record<string, unknown>);
       if (compiled(instance)) return { valid: true, errors: [] };
       return { valid: false, errors: (compiled.errors ?? []).map(normalizeError) };
@@ -80,10 +90,19 @@ export class SchemaInstanceValidator {
       };
     }
   }
+
+  #createAjv(loadSchema?: (uri: string) => Promise<Record<string, unknown>>): Ajv2020 {
+    return new Ajv2020({
+      allErrors: true,
+      strict: false,
+      validateSchema: true,
+      ...(loadSchema ? { loadSchema } : {}),
+    });
+  }
 }
 
-export function validateInstance(schema: unknown, instance: unknown): InstanceValidationReport {
-  return new SchemaInstanceValidator().validate(schema, instance);
+export function validateInstance(schema: unknown, instance: unknown, options: InstanceValidationOptions = {}): InstanceValidationReport {
+  return new SchemaInstanceValidator({ schemaResolver: options.schemaResolver }).validate(schema, instance, options);
 }
 
 export async function validateInstanceAsync(schema: unknown, instance: unknown, options: AsyncInstanceValidationOptions): Promise<InstanceValidationReport> {

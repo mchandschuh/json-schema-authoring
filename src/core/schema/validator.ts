@@ -1,8 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { Ajv2020, type ErrorObject, type ValidateFunction } from 'ajv/dist/2020.js';
+import { getDefaultCachedRegistrySchemaResolver } from './cached-registry-schema-resolver.js';
 import { schemaRules } from './rules/index.js';
-import { LocalSchemaResolver } from './resolver.js';
+import type { SchemaResolver } from './resolver-contract.js';
 import { isSchemaObject, type SchemaFinding, type SchemaRule, type ValidationReport } from './types.js';
 
 export type { ValidationReport } from './types.js';
@@ -11,8 +12,8 @@ const DIALECT = 'https://json-schema.org/draft/2020-12/schema';
 
 export interface SchemaValidatorOptions {
   readonly rules?: readonly SchemaRule[];
-  readonly schemaRoot?: string;
   readonly schemaRoots?: readonly string[];
+  readonly schemaResolver?: SchemaResolver;
 }
 
 export interface ValidateSchemaOptions extends SchemaValidatorOptions {
@@ -31,29 +32,29 @@ function parserFinding(path: string, message: string, code = 'INVALID_JSON'): Sc
 
 export class SchemaValidator {
   readonly #rules: readonly SchemaRule[];
-  readonly #schemaRoot: string | undefined;
-  readonly #schemaRoots: readonly string[] | undefined;
-  readonly #ajv: Ajv2020;
+  readonly #schemaRoots: readonly string[];
+  readonly #schemaResolver: SchemaResolver;
 
   constructor(options: SchemaValidatorOptions = {}) {
     this.#rules = options.rules ?? schemaRules;
-    this.#schemaRoot = options.schemaRoot;
-    this.#schemaRoots = options.schemaRoots;
-    this.#ajv = new Ajv2020({ allErrors: true, strict: false, validateSchema: true });
+    this.#schemaRoots = options.schemaRoots ?? [];
+    this.#schemaResolver = options.schemaResolver ?? getDefaultCachedRegistrySchemaResolver();
   }
 
   validate(documentPath: string, schema: unknown): ValidationReport {
     if (!isSchemaObject(schema)) return { path: documentPath, valid: false, findings: [parserFinding('$', 'The document must contain a JSON object representing a schema.', 'ROOT_NOT_OBJECT')] };
 
     const findings: SchemaFinding[] = [];
-    if (!this.#ajv.validateSchema(schema)) findings.push(parserFinding('$', ajvMessage(this.#ajv.errors), 'SCHEMA_META_INVALID'));
+    const ajv = this.#createAjv();
+    if (!ajv.validateSchema(schema)) findings.push(parserFinding('$', ajvMessage(ajv.errors), 'SCHEMA_META_INVALID'));
     let compiled: ValidateFunction | undefined;
     try {
-      compiled = this.#ajv.compile(schema);
+      this.#schemaResolver.registerSync(ajv, { documentPath, rootSchema: schema, schemaRoots: this.#schemaRoots });
+      compiled = ajv.compile(schema);
     } catch (error) {
       findings.push(parserFinding('$', `Schema cannot be compiled: ${error instanceof Error ? error.message : String(error)}`, 'SCHEMA_COMPILE_ERROR'));
     }
-    findings.push(...this.#checkExamples(schema, documentPath, this.#ajv, compiled));
+    findings.push(...this.#checkExamples(schema, documentPath, ajv, compiled));
     return { path: documentPath, valid: findings.length === 0, findings };
   }
 
@@ -61,19 +62,12 @@ export class SchemaValidator {
     if (!isSchemaObject(schema)) return { path: documentPath, valid: false, findings: [parserFinding('$', 'The document must contain a JSON object representing a schema.', 'ROOT_NOT_OBJECT')] };
 
     const findings: SchemaFinding[] = [];
-    const metaAjv = new Ajv2020({ allErrors: true, strict: false, validateSchema: true });
-    if (!metaAjv.validateSchema(schema)) findings.push(parserFinding('$', ajvMessage(metaAjv.errors), 'SCHEMA_META_INVALID'));
-
-    const resolver = new LocalSchemaResolver({ documentPath, rootSchema: schema, schemaRoot: this.#schemaRoot, schemaRoots: this.#schemaRoots });
-    const ajv = new Ajv2020({
-      allErrors: true,
-      strict: false,
-      validateSchema: true,
-      loadSchema: (uri) => resolver.load(uri),
-    });
+    const resolverContext = { documentPath, rootSchema: schema, schemaRoots: this.#schemaRoots };
+    const ajv = this.#createAjv(this.#schemaResolver.createLoadSchema(resolverContext));
+    if (!ajv.validateSchema(schema)) findings.push(parserFinding('$', ajvMessage(ajv.errors), 'SCHEMA_META_INVALID'));
     let compiled: ValidateFunction | undefined;
     try {
-      await resolver.registerWith(ajv);
+      await this.#schemaResolver.register(ajv, resolverContext);
       compiled = await ajv.compileAsync(schema);
     } catch (error) {
       findings.push(parserFinding('$', `Schema cannot be compiled: ${error instanceof Error ? error.message : String(error)}`, 'SCHEMA_COMPILE_ERROR'));
@@ -117,7 +111,7 @@ export class SchemaValidator {
         const scopedChildSchema = isSchemaObject(childSchema)
           ? {
             ...childSchema,
-            ...(this.#schemaRoot || (this.#schemaRoots?.length ?? 0) > 0 ? { $id: `${exampleId}?example=${exampleSchemaCounter++}` } : {}),
+            ...(this.#schemaRoots.length > 0 ? { $id: `${exampleId}?example=${exampleSchemaCounter++}` } : {}),
             ...(isSchemaObject(schema.$defs) || isSchemaObject(childSchema.$defs)
               ? { $defs: { ...(isSchemaObject(schema.$defs) ? schema.$defs : {}), ...(isSchemaObject(childSchema.$defs) ? childSchema.$defs : {}) } }
               : {}),
@@ -132,6 +126,15 @@ export class SchemaValidator {
     };
     for (const rule of this.#rules) findings.push(...rule.check({ schema, documentPath, validateInstance }));
     return findings;
+  }
+
+  #createAjv(loadSchema?: (uri: string) => Promise<Record<string, unknown>>): Ajv2020 {
+    return new Ajv2020({
+      allErrors: true,
+      strict: false,
+      validateSchema: true,
+      ...(loadSchema ? { loadSchema } : {}),
+    });
   }
 }
 

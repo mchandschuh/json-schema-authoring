@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { SchemaValidator } from '../src/core/schema/validator.js';
+import type { SchemaResolver } from '../src/core/schema/resolver-contract.js';
 
 const fixture = async (content: string): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'schema-validate-'));
@@ -50,6 +51,49 @@ const externalFixtures = async (): Promise<{ schemaPath: string }> => {
 };
 
 describe('SchemaValidator', () => {
+  it('accepts a custom resolver interface for synchronous and asynchronous validation', async () => {
+    const childSchema = {
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      $id: 'https://schemas.example.test/custom/child',
+      type: 'string',
+    };
+    const rootSchema = {
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      $id: 'https://schemas.example.test/custom/root',
+      type: 'object',
+      properties: { child: { $ref: childSchema.$id } },
+      required: ['child'],
+      additionalProperties: false,
+    };
+    const contexts: string[] = [];
+    const customResolver: SchemaResolver = {
+      registerSync: (ajv, context) => {
+        contexts.push(`sync:${context.documentPath}:${context.schemaRoots?.join(',') ?? ''}`);
+        ajv.addSchema(childSchema);
+      },
+      register: async (_ajv, context) => {
+        contexts.push(`async:${context.documentPath}:${context.schemaRoots?.join(',') ?? ''}`);
+      },
+      createLoadSchema: (context) => async (uri) => {
+        contexts.push(`load:${context.documentPath}:${uri}`);
+        return childSchema;
+      },
+    };
+    const validator = new SchemaValidator({
+      rules: [],
+      schemaRoots: ['/custom/first', '/custom/second'],
+      schemaResolver: customResolver,
+    });
+
+    expect(validator.validate('/custom/root.schema.json', rootSchema)).toMatchObject({ valid: true, findings: [] });
+    await expect(validator.validateAsync('/custom/root.schema.json', rootSchema)).resolves.toMatchObject({ valid: true, findings: [] });
+    expect(contexts).toEqual([
+      'sync:/custom/root.schema.json:/custom/first,/custom/second',
+      'async:/custom/root.schema.json:/custom/first,/custom/second',
+      `load:/custom/root.schema.json:${childSchema.$id}`,
+    ]);
+  });
+
   it('validates a complete schema file', async () => {
     const path = await fixture(JSON.stringify({
       $schema: 'https://json-schema.org/draft/2020-12/schema', $id: 'https://example.com/user', title: 'User', description: 'A user.', type: 'object',
@@ -232,7 +276,7 @@ describe('SchemaValidator', () => {
       required: ['id'], additionalProperties: false, examples: [{ id: 'TASK-001' }],
     }), 'utf8');
 
-    const report = await new SchemaValidator({ schemaRoot }).validateFile(schemaPath);
+    const report = await new SchemaValidator({ schemaRoots: [schemaRoot] }).validateFile(schemaPath);
     expect(report.valid).toBe(true);
     expect(report.findings).toEqual([]);
   });
@@ -250,8 +294,8 @@ describe('SchemaValidator', () => {
       required: ['child'], additionalProperties: false, examples: [{ child: 'value' }],
     }), 'utf8');
 
-    const report = await new SchemaValidator({ schemaRoot }).validateFile(schemaPath);
+    const report = await new SchemaValidator({ schemaRoots: [schemaRoot] }).validateFile(schemaPath);
     expect(report.findings.map((item) => item.code)).toContain('SCHEMA_COMPILE_ERROR');
-    expect(report.findings.some((item) => item.message.includes('escapes the schema root'))).toBe(true);
+    expect(report.findings.some((item) => item.message.includes('escapes the trusted schema roots'))).toBe(true);
   });
 });

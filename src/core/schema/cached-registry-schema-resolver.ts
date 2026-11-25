@@ -7,6 +7,7 @@ import { readFile, readdir, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { SchemaRegistryConfiguration } from './registry.js';
+import type { SchemaResolver, SchemaResolverAjv, SchemaResolverContext } from './resolver-contract.js';
 import { isSchemaObject } from './types.js';
 
 const DIALECT = 'https://json-schema.org/draft/2020-12/schema';
@@ -58,11 +59,7 @@ export interface CachedRegistrySchemaResolverOptions {
   readonly fileSystem?: CachedRegistrySchemaFileSystem;
 }
 
-export interface CachedRegistrySchemaResolutionContext {
-  readonly documentPath: string;
-  readonly rootSchema?: unknown;
-  readonly schemaRoots?: readonly string[];
-}
+export type CachedRegistrySchemaResolutionContext = SchemaResolverContext;
 
 export interface CachedRegistrySchemaResolution {
   readonly requestedUri: string;
@@ -71,10 +68,7 @@ export interface CachedRegistrySchemaResolution {
   readonly schema: Record<string, unknown>;
 }
 
-export interface CachedRegistrySchemaAjv {
-  addSchema(schema: Record<string, unknown>, key?: string): unknown;
-  getSchema?(key: string): unknown;
-}
+export type CachedRegistrySchemaAjv = SchemaResolverAjv;
 
 interface CachedSchema extends CachedRegistrySchemaResolution {
   readonly generation: number;
@@ -189,7 +183,7 @@ function unique(values: readonly string[]): readonly string[] {
   return [...new Set(values)];
 }
 
-export class CachedRegistrySchemaResolver {
+export class CachedRegistrySchemaResolver implements SchemaResolver {
   readonly #options: CachedRegistrySchemaResolverOptions;
   readonly #fileSystem: ResolverFileSystem;
   readonly #documentCache = new Map<string, CachedSchema>();
@@ -219,10 +213,16 @@ export class CachedRegistrySchemaResolver {
 
     const index = this.#ensureIndexSync(session);
     const indexedPath = index.byId.get(resource);
-    if (indexedPath) return this.#requested(this.#loadPathSync(indexedPath, resource, session), uri);
+    if (indexedPath) {
+      const resolution = this.#loadPathSync(indexedPath, resource, session);
+      this.#rememberReferenceAlias(resource, resolution, session);
+      return this.#requested(resolution, uri);
+    }
 
     const path = this.#pathFor(resource, session);
-    return this.#requested(this.#loadPathSync(path, resource, session), uri);
+    const resolution = this.#loadPathSync(path, resource, session);
+    this.#rememberReferenceAlias(resource, resolution, session);
+    return this.#requested(resolution, uri);
   }
 
   async resolve(uri: string, context: CachedRegistrySchemaResolutionContext): Promise<CachedRegistrySchemaResolution> {
@@ -242,13 +242,19 @@ export class CachedRegistrySchemaResolver {
     const path = indexedPath ?? this.#pathFor(resource, session);
     const loadKey = cacheKey(session.scope, indexedPath ? resource : path);
     const inFlight = this.#loadPromises.get(loadKey);
-    if (inFlight) return this.#requested(await inFlight, uri);
+    if (inFlight) {
+      const resolution = await inFlight;
+      this.#rememberReferenceAlias(resource, resolution, session);
+      return this.#requested(resolution, uri);
+    }
 
     const generation = this.#generation;
     const promise = this.#loadPath(path, resource, session, generation);
     this.#loadPromises.set(loadKey, promise);
     try {
-      return this.#requested(await promise, uri);
+      const resolution = await promise;
+      this.#rememberReferenceAlias(resource, resolution, session);
+      return this.#requested(resolution, uri);
     } finally {
       if (this.#loadPromises.get(loadKey) === promise) this.#loadPromises.delete(loadKey);
     }
@@ -395,6 +401,17 @@ export class CachedRegistrySchemaResolver {
     const id = rootSchemaId(session.context.rootSchema);
     if (uri.startsWith('#') || (id !== undefined && uri === id)) return root;
     return undefined;
+  }
+
+  #rememberReferenceAlias(resource: string, resolution: CachedSchema, session: ResolutionSession): void {
+    const rootId = rootSchemaId(session.context.rootSchema);
+    if (!rootId || isAbsoluteUri(resource)) return;
+    try {
+      const alias = withoutFragment(new URL(resource, rootId).href);
+      this.#uriCache.set(cacheKey(session.scope, alias), resolution);
+    } catch {
+      // Invalid references are reported by the resolver path or authoring rules.
+    }
   }
 
   #cached(scope: string, uri: string): CachedSchema | undefined {
@@ -651,7 +668,9 @@ export function createCachedRegistrySchemaResolver(options: CachedRegistrySchema
   return new CachedRegistrySchemaResolver(options);
 }
 
-const defaultCachedRegistrySchemaResolver = new CachedRegistrySchemaResolver();
+const defaultCachedRegistrySchemaResolver = new CachedRegistrySchemaResolver({
+  registryConfiguration: new SchemaRegistryConfiguration(),
+});
 
 export function getDefaultCachedRegistrySchemaResolver(): CachedRegistrySchemaResolver {
   return defaultCachedRegistrySchemaResolver;

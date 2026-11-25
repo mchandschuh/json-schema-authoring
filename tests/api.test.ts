@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { findSchema, loadSchema, validateSchema } from '../src/index.js';
 import { SchemaRegistryConfiguration } from '../src/core/schema/registry.js';
+import type { SchemaResolver } from '../src/core/schema/resolver-contract.js';
 import type { SchemaRule } from '../src/core/schema/types.js';
 
 const schema = {
@@ -141,6 +142,30 @@ describe('schema convenience API', () => {
     expect(validateSchema('{"type":').findings[0]?.code).toBe('INVALID_JSON');
   });
 
+  it('passes a custom resolver interface through validateSchema', () => {
+    const childSchema = { $id: 'https://schemas.example.test/api/custom-child', type: 'string' };
+    const rootSchema = {
+      $id: 'https://schemas.example.test/api/custom-root',
+      type: 'object',
+      properties: { child: { $ref: childSchema.$id } },
+      required: ['child'],
+      additionalProperties: false,
+    };
+    let registered = false;
+    const resolver: SchemaResolver = {
+      registerSync: (ajv) => {
+        registered = true;
+        ajv.addSchema(childSchema);
+      },
+      register: async () => undefined,
+      createLoadSchema: async () => childSchema,
+    };
+
+    const report = validateSchema(rootSchema, { documentPath: '/api/root.schema.json', schemaResolver: resolver, rules: [] });
+    expect(report).toEqual({ path: '/api/root.schema.json', valid: true, findings: [] });
+    expect(registered).toBe(true);
+  });
+
   it('applies documentPath, schema roots, and custom rules to validation', () => {
     const documentPath = '/tmp/schema-api-content/root.schema.json';
     const customRule: SchemaRule = {
@@ -157,7 +182,6 @@ describe('schema convenience API', () => {
 
     const report = validateSchema(JSON.stringify(schema), {
       documentPath,
-      schemaRoot: '/tmp/schema-api-content',
       schemaRoots: ['/tmp/schema-api-content', '/tmp/schema-api-other'],
       rules: [customRule],
     });

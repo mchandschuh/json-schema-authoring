@@ -128,8 +128,7 @@ async function validateInstanceFile(schemaPath: string, documentPath: string, sc
     const [schema, document] = await Promise.all([readJsonSchema(schemaPath), parseDocumentFile(documentPath)]);
     const result: InstanceValidationReport = await validateInstanceAsync(schema, document.value, {
       documentPath: schemaPath,
-      schemaRoot,
-      schemaRoots,
+      schemaRoots: [...(schemaRoot ? [schemaRoot] : []), ...schemaRoots],
     });
     return { schema: schemaPath, document: documentPath, format: document.format, ...result };
   } catch (error) {
@@ -205,7 +204,7 @@ const command: CommandDescriptor = {
       return report.valid ? 0 : 1;
     }
     if (parsed.paths.length === 0) return help();
-    const reports = await Promise.all(parsed.paths.map((path) => new SchemaValidator({ schemaRoot: parsed.schemaRoot, schemaRoots }).validateFile(path)));
+    const reports = await Promise.all(parsed.paths.map((path) => new SchemaValidator({ schemaRoots: [...(parsed.schemaRoot ? [parsed.schemaRoot] : []), ...schemaRoots] }).validateFile(path)));
     if (parsed.json) console.log(JSON.stringify({ valid: reports.every((report) => report.valid), reports }, null, 2));
     else reports.forEach(printReport);
     return reports.every((report) => report.valid) ? 0 : 1;

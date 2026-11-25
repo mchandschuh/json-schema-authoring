@@ -27,7 +27,7 @@ async function validatePayload(result: unknown) {
       },
     },
     result,
-  }, { documentPath: schemaPath, schemaRoot });
+  }, { documentPath: schemaPath, schemaRoots: [schemaRoot] });
 }
 
 describe('decomposition produced-task results', () => {

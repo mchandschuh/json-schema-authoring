@@ -27,6 +27,19 @@ export type {
 } from './core/schema/validator.js';
 
 export {
+  SchemaInstanceValidator,
+  validateInstance,
+  validateInstanceAsync,
+} from './core/schema/instance.js';
+export type {
+  AsyncInstanceValidationOptions,
+  InstanceValidationOptions,
+  InstanceValidationError,
+  InstanceValidationReport,
+  SchemaInstanceValidatorOptions,
+} from './core/schema/instance.js';
+
+export {
   CachedRegistrySchemaResolver,
   CachedRegistrySchemaResolverError,
   createCachedRegistrySchemaResolver,
@@ -41,3 +54,8 @@ export type {
   CachedRegistrySchemaResolverErrorCode,
   CachedRegistrySchemaResolverOptions,
 } from './core/schema/cached-registry-schema-resolver.js';
+export type {
+  SchemaResolver,
+  SchemaResolverAjv,
+  SchemaResolverContext,
+} from './core/schema/resolver-contract.js';
